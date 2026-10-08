@@ -53,6 +53,7 @@ def create_app():
                     "http://localhost:5174",
                     "http://127.0.0.1:5174",
                     "http://localhost:3000",
+                    "https://shop-to-door-web-294288480400.asia-south2.run.app",
                 ],
                 "methods": [
                     "GET",
