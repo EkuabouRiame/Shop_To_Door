@@ -5,7 +5,7 @@ import DeliveryAccountForm from "./DeliveryAccountForm";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
-  "http://127.0.0.1:5000/api";
+  "https://shop-to-door-backend-294288480400.asia-south2.run.app/api";
 
 const API_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, "");
 

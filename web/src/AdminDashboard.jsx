@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
-  "http://127.0.0.1:5000/api";
+  "https://shop-to-door-backend-294288480400.asia-south2.run.app/api";
+
+const BACKEND_URL = API_BASE_URL.replace(/\/api\/?$/, "");
 
 function AdminDashboard({ user, onBack }) {
   const [activeSection, setActiveSection] = useState("dashboard");
@@ -485,10 +487,10 @@ function AdminDashboard({ user, onBack }) {
     }
 
     if (imagePath.startsWith("/")) {
-      return `http://127.0.0.1:5000${imagePath}`;
+      return `${BACKEND_URL}${imagePath}`;
     }
 
-    return `http://127.0.0.1:5000/${imagePath}`;
+    return `${BACKEND_URL}/${imagePath}`;
   };
 
   // =========================================================
