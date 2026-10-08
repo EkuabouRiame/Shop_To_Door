@@ -1,0 +1,188 @@
+/* =========================================================
+   GLOBAL
+========================================================= */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  width: 100%;
+  background: #fff7cc;
+}
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  background: #fff7cc;
+  color: #111827;
+}
+
+#root {
+  min-height: 100vh;
+  background: #fff7cc;
+}
+
+/* =========================================================
+   DESKTOP NAVIGATION
+========================================================= */
+
+.desktop-navigation {
+  width: 100%;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 24px;
+  background: #ffffff;
+  border-top: 1px solid #e5e7eb;
+  border-bottom: 1px solid #e5e7eb;
+  overflow-x: auto;
+}
+
+.desktop-navigation button {
+  border: none;
+  background: transparent;
+  color: #172554;
+  padding: 10px 16px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
+}
+
+.desktop-navigation button:hover {
+  background: #eef4ff;
+  color: #1677ff;
+}
+
+.desktop-navigation button.active {
+  background: #eef4ff;
+  color: #1677ff;
+}
+
+/* =========================================================
+   MOBILE BOTTOM NAVIGATION
+========================================================= */
+
+.bottom-navigation {
+  display: none;
+}
+
+/* =========================================================
+   MOBILE
+========================================================= */
+
+@media (max-width: 768px) {
+
+  /* Hide desktop navigation */
+  .desktop-navigation {
+    display: none;
+  }
+
+  /* Bottom navigation */
+  .bottom-navigation {
+    position: fixed;
+    display: flex;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 68px;
+    background: #ffffff;
+    border-top: 1px solid #e5e7eb;
+    z-index: 9999;
+    padding:
+      5px
+      8px
+      env(safe-area-inset-bottom)
+      8px;
+    justify-content: space-around;
+  }
+
+  .bottom-navigation button {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: #6b7280;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    cursor: pointer;
+    font-size: 22px;
+    min-width: 0;
+  }
+
+  .bottom-navigation button small {
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .bottom-navigation button.active {
+    color: #1677ff;
+  }
+
+  /* Give page content room above bottom navigation */
+  body {
+    padding-bottom: 68px;
+  }
+}
+
+/* =========================================================
+   SMALL MOBILE
+========================================================= */
+
+@media (max-width: 480px) {
+
+  .bottom-navigation {
+    height: 64px;
+  }
+
+  .bottom-navigation button {
+    font-size: 20px;
+  }
+
+  .bottom-navigation button small {
+    font-size: 10px;
+  }
+
+  body {
+    padding-bottom: 64px;
+  }
+}
+
+/* =========================================================
+   DESKTOP
+========================================================= */
+
+@media (min-width: 769px) {
+
+  body {
+    padding-bottom: 0;
+  }
+}
+
+/* =========================================================
+   BUTTON RESET
+========================================================= */
+
+button {
+  font-family: inherit;
+}
+
+/* =========================================================
+   IMAGES
+========================================================= */
+
+img {
+  max-width: 100%;
+}

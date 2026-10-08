@@ -1,0 +1,264 @@
+.customer-delivery-page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 30px 16px;
+  background: #f5f7fb;
+}
+
+.customer-delivery-card {
+  width: 100%;
+  max-width: 520px;
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 30px;
+  box-shadow: 0 10px 35px rgba(0, 0, 0, 0.08);
+}
+
+.customer-delivery-header {
+  text-align: center;
+  margin-bottom: 25px;
+}
+
+.customer-delivery-icon {
+  font-size: 48px;
+  margin-bottom: 10px;
+}
+
+.customer-delivery-header h1 {
+  margin: 0;
+  font-size: 28px;
+  color: #172033;
+}
+
+.customer-delivery-header p {
+  margin: 10px 0 0;
+  color: #687386;
+  line-height: 1.5;
+}
+
+.delivery-scanner-section {
+  text-align: center;
+}
+
+.delivery-qr-reader {
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto 20px;
+  overflow: hidden;
+  border-radius: 14px;
+}
+
+.delivery-qr-reader video {
+  width: 100% !important;
+  border-radius: 14px;
+}
+
+.delivery-primary-button,
+.delivery-confirm-button,
+.delivery-secondary-button {
+  width: 100%;
+  border: none;
+  border-radius: 10px;
+  padding: 14px 18px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 10px;
+  transition: 0.2s ease;
+}
+
+.delivery-primary-button {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.delivery-primary-button:hover {
+  background: #1d4ed8;
+}
+
+.delivery-confirm-button {
+  background: #16a34a;
+  color: #ffffff;
+}
+
+.delivery-confirm-button:hover {
+  background: #15803d;
+}
+
+.delivery-confirm-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.delivery-secondary-button {
+  background: #eef2f7;
+  color: #263246;
+}
+
+.delivery-secondary-button:hover {
+  background: #e2e8f0;
+}
+
+.delivery-scanner-help {
+  color: #687386;
+  font-size: 14px;
+  line-height: 1.5;
+  margin-top: 15px;
+}
+
+.delivery-alert {
+  padding: 13px 15px;
+  border-radius: 10px;
+  margin-bottom: 18px;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+.delivery-alert-error {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
+.delivery-alert-success {
+  background: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+.delivery-loading {
+  text-align: center;
+  padding: 30px 10px;
+  color: #687386;
+}
+
+.delivery-spinner {
+  width: 35px;
+  height: 35px;
+  margin: 0 auto 15px;
+  border: 4px solid #e5e7eb;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: delivery-spin 0.8s linear infinite;
+}
+
+@keyframes delivery-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.delivery-confirmation-section {
+  margin-top: 10px;
+}
+
+.delivery-verified {
+  text-align: center;
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+  padding: 12px;
+  border-radius: 10px;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+
+.delivery-order-box {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.delivery-order-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.delivery-order-row:last-child {
+  border-bottom: none;
+}
+
+.delivery-order-row span {
+  color: #687386;
+}
+
+.delivery-order-row strong {
+  color: #172033;
+  text-align: right;
+}
+
+.delivery-warning {
+  margin-top: 18px;
+  padding: 15px;
+  border-radius: 10px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+}
+
+.delivery-warning p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.delivery-completed-section {
+  text-align: center;
+  padding: 20px 0;
+}
+
+.delivery-success-icon {
+  width: 70px;
+  height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  background: #dcfce7;
+  color: #16a34a;
+  font-size: 40px;
+  font-weight: bold;
+}
+
+.delivery-completed-section h2 {
+  margin: 0;
+  color: #172033;
+}
+
+.delivery-completed-section p {
+  color: #687386;
+  line-height: 1.5;
+  margin: 12px 0 20px;
+}
+
+.delivery-paid-message {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+  padding: 12px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+@media (max-width: 600px) {
+  .customer-delivery-page {
+    padding: 15px;
+    align-items: flex-start;
+  }
+
+  .customer-delivery-card {
+    margin-top: 20px;
+    padding: 22px 18px;
+    border-radius: 14px;
+  }
+
+  .customer-delivery-header h1 {
+    font-size: 24px;
+  }
+}
