@@ -42,6 +42,11 @@ class Config:
     # RAZORPAY
     # =========================================
 
+    RAZORPAY_ENABLED = os.getenv(
+        "RAZORPAY_ENABLED",
+        "false"
+    ).lower() == "true"
+
     RAZORPAY_KEY_ID = os.getenv(
         "RAZORPAY_KEY_ID",
         ""
@@ -51,7 +56,7 @@ class Config:
         "RAZORPAY_KEY_SECRET",
         ""
     )
-    
+
     # =========================================
     # EMAIL / PASSWORD RESET
     # =========================================
@@ -85,6 +90,7 @@ class Config:
         "MAIL_DEFAULT_SENDER",
         ""
     )
+
     # =========================================
     # BASE DIRECTORY
     # =========================================

@@ -1,4 +1,5 @@
-from flask import Blueprint, jsonify, request
+
+from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from app.extensions import db
@@ -16,12 +17,41 @@ payments_bp = Blueprint(
 
 
 # =========================================================
+# PAYMENT CONFIGURATION
+# =========================================================
+
+@payments_bp.get("/config")
+def get_payment_config():
+    razorpay_enabled = current_app.config.get(
+        "RAZORPAY_ENABLED",
+        False
+    )
+
+    return jsonify({
+        "success": True,
+        "cod_enabled": True,
+        "razorpay_enabled": razorpay_enabled
+    }), 200
+
+
+# =========================================================
 # CREATE RAZORPAY ORDER
 # =========================================================
 
 @payments_bp.post("/create/<int:order_id>")
 @jwt_required()
 def create_razorpay_order(order_id):
+
+    # -----------------------------------------------------
+    # RAZORPAY FEATURE SWITCH
+    # -----------------------------------------------------
+
+    if not current_app.config.get("RAZORPAY_ENABLED", False):
+        return jsonify({
+            "success": False,
+            "message": "Online payment is currently unavailable. Please select Cash on Delivery."
+        }), 503
+
     user_id = get_jwt_identity()
 
     # Find the order belonging to the logged-in user

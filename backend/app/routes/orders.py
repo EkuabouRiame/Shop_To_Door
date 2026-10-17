@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from ..extensions import db
@@ -531,6 +531,22 @@ def create_order():
                 "Allowed values: cod, razorpay, online"
             ),
         }), 400
+
+    # -----------------------------------------------------
+    # RAZORPAY FEATURE SWITCH
+    # -----------------------------------------------------
+
+    if (
+        payment_method in {"razorpay", "online"}
+        and not current_app.config.get("RAZORPAY_ENABLED", False)
+    ):
+        return jsonify({
+            "status": "error",
+            "message": (
+                "Online payment is currently unavailable. "
+                "Please select Cash on Delivery."
+            ),
+        }), 503
 
     # -----------------------------------------------------
     # SHIPPING INFORMATION
