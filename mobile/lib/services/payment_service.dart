@@ -1,3 +1,4 @@
+
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -18,6 +19,18 @@ class PaymentService {
       'Accept': 'application/json',
       'Authorization': 'Bearer $token',
     };
+  }
+
+  // Get payment configuration from the backend.
+  static Future<Map<String, dynamic>> getPaymentConfig() async {
+    final response = await http.get(
+      Uri.parse('${ApiConfig.payments}/config'),
+      headers: {
+        'Accept': 'application/json',
+      },
+    );
+
+    return _handleResponse(response);
   }
 
   static Future<Map<String, dynamic>> createPaymentOrder(

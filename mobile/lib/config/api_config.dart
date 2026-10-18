@@ -1,6 +1,8 @@
+
 class ApiConfig {
-  // Android Emulator → Windows host computer
-  static const String baseUrl = 'http://10.0.2.2:5000/api';
+  // Production backend hosted on Google Cloud Run
+  static const String baseUrl =
+      'https://shop-to-door-backend-294288480400.asia-south2.run.app/api';
 
   // API endpoints
   static const String products = '$baseUrl/products/';

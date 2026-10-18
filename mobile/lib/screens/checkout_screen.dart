@@ -1,3 +1,4 @@
+
 import 'package:flutter/material.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
 
@@ -42,6 +43,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   bool _loading = true;
   bool _placingOrder = false;
+  bool _razorpayEnabled = false;
 
   String? _error;
 
@@ -86,6 +88,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
 
     _loadCart();
+    _loadPaymentConfig();
   }
 
   @override
@@ -101,6 +104,37 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     _notesController.dispose();
 
     super.dispose();
+  }
+
+  // =========================================================
+  // LOAD PAYMENT CONFIGURATION
+  // =========================================================
+
+  Future<void> _loadPaymentConfig() async {
+    try {
+      final config =
+          await PaymentService.getPaymentConfig();
+
+      final enabled =
+          config['razorpay_enabled'] == true;
+
+      if (!mounted) return;
+
+      setState(() {
+        _razorpayEnabled = enabled;
+
+        if (!enabled) {
+          _paymentMethod = 'cod';
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+
+      setState(() {
+        _razorpayEnabled = false;
+        _paymentMethod = 'cod';
+      });
+    }
   }
 
   // =========================================================
@@ -183,6 +217,24 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         const SnackBar(
           content: Text(
             'Your cart is empty.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    // Prevent Razorpay orders if disabled on the server.
+    if (_paymentMethod == 'razorpay' &&
+        !_razorpayEnabled) {
+      setState(() {
+        _paymentMethod = 'cod';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Online payment is currently unavailable. Please use Cash on Delivery.',
           ),
         ),
       );
@@ -722,6 +774,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             onChanged: (value) {
               if (value == null) return;
 
+              if (value == 'razorpay' &&
+                  !_razorpayEnabled) {
+                return;
+              }
+
               setState(() {
                 _paymentMethod = value;
               });
@@ -736,15 +793,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   icon: Icons.payments_outlined,
                 ),
 
-                const SizedBox(height: 7),
+                if (_razorpayEnabled) ...[
+                  const SizedBox(height: 7),
 
-                _buildPaymentOption(
-                  value: 'razorpay',
-                  title: 'Online Payment',
-                  subtitle:
-                      'Pay securely using Razorpay',
-                  icon: Icons.credit_card_outlined,
-                ),
+                  _buildPaymentOption(
+                    value: 'razorpay',
+                    title: 'Online Payment',
+                    subtitle:
+                        'Pay securely using Razorpay',
+                    icon: Icons.credit_card_outlined,
+                  ),
+                ],
               ],
             ),
           ),
