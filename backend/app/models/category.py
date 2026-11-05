@@ -1,3 +1,4 @@
+
 from datetime import datetime
 
 from ..extensions import db
@@ -13,6 +14,31 @@ class Category(db.Model):
     id = db.Column(
         db.Integer,
         primary_key=True
+    )
+
+    # =========================================
+    # NESTED CATEGORY RELATIONSHIP
+    # =========================================
+
+    parent_id = db.Column(
+        db.Integer,
+        db.ForeignKey("categories.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True
+    )
+
+    parent = db.relationship(
+        "Category",
+        remote_side=[id],
+        foreign_keys=[parent_id],
+        back_populates="children"
+    )
+
+    children = db.relationship(
+        "Category",
+        foreign_keys=[parent_id],
+        back_populates="parent",
+        passive_deletes=True
     )
 
     # =========================================

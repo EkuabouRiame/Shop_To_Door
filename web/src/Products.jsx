@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 
 import "./Products.css";
 
@@ -45,69 +45,76 @@ function Products({
       setError("");
       setMessage("");
 
-      const response = await fetch(
-        `${API_BASE_URL}/products/`,
-        {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-          },
+      const allProducts = [];
+      let page = 1;
+      let totalPages = 1;
+
+      do {
+        const response = await fetch(
+          `${API_BASE_URL}/products/?page=${page}&per_page=100`,
+          {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+            },
+          }
+        );
+
+        let data;
+
+        try {
+          data = await response.json();
+        } catch {
+          throw new Error(
+            `Server returned an invalid response. HTTP ${response.status}`
+          );
         }
-      );
 
-      let data;
+        if (!response.ok) {
+          throw new Error(
+            data?.message ||
+              data?.msg ||
+              `Unable to load products. HTTP ${response.status}`
+          );
+        }
 
-      try {
-        data = await response.json();
-      } catch {
-        throw new Error(
-          `Server returned an invalid response. HTTP ${response.status}`
+        let productList = [];
+
+        if (Array.isArray(data)) {
+          productList = data;
+        } else if (Array.isArray(data?.products)) {
+          productList = data.products;
+        } else if (Array.isArray(data?.data)) {
+          productList = data.data;
+        } else if (Array.isArray(data?.items)) {
+          productList = data.items;
+        } else if (
+          data?.products &&
+          Array.isArray(data.products.items)
+        ) {
+          productList = data.products.items;
+        }
+
+        allProducts.push(...productList);
+
+        const reportedTotalPages = Number(
+          data?.pagination?.total_pages
         );
-      }
 
-      console.log("Products response:", data);
+        if (Number.isFinite(reportedTotalPages)) {
+          totalPages = reportedTotalPages;
+        } else {
+          totalPages = 1;
+        }
 
-      // =====================================================
-      // HTTP ERROR
-      // =====================================================
+        page += 1;
+      } while (page <= totalPages);
 
-      if (!response.ok) {
-        throw new Error(
-          data?.message ||
-            data?.msg ||
-            `Unable to load products. HTTP ${response.status}`
-        );
-      }
-
-      // =====================================================
-      // GET PRODUCT ARRAY
-      // =====================================================
-
-      let productList = [];
-
-      if (Array.isArray(data)) {
-        productList = data;
-      } else if (Array.isArray(data?.products)) {
-        productList = data.products;
-      } else if (Array.isArray(data?.data)) {
-        productList = data.data;
-      } else if (Array.isArray(data?.items)) {
-        productList = data.items;
-      } else if (
-        data?.products &&
-        Array.isArray(data.products.items)
-      ) {
-        productList = data.products.items;
-      }
-
-      console.log("Products loaded:", productList);
-
-      setProducts(productList);
+      console.log("Products loaded:", allProducts);
+      setProducts(allProducts);
     } catch (error) {
       console.error("Products error:", error);
-
       setProducts([]);
-
       setError(
         error.message || "Unable to load products."
       );
@@ -115,7 +122,6 @@ function Products({
       setLoading(false);
     }
   }
-
   // =========================================================
   // GET BACKEND BASE URL
   // =========================================================
@@ -383,25 +389,30 @@ function Products({
     // CATEGORY ID
     // -------------------------------------------------------
 
+    const productCategoryId =
+      typeof product?.category === "object"
+        ? product.category?.id
+        : product?.category_id;
+
+    const selectedCategoryIds = [
+      selectedId,
+      ...(Array.isArray(selectedCategory.subcategoryIds)
+        ? selectedCategory.subcategoryIds
+        : []),
+    ];
+
     if (
-      selectedId !== undefined &&
-      selectedId !== null
+      productCategoryId !== undefined &&
+      productCategoryId !== null &&
+      selectedCategoryIds.some(
+        (categoryId) =>
+          categoryId !== undefined &&
+          categoryId !== null &&
+          String(productCategoryId) === String(categoryId)
+      )
     ) {
-      const productCategoryId =
-        typeof product?.category === "object"
-          ? product.category?.id
-          : product?.category_id;
-
-      if (
-        productCategoryId !== undefined &&
-        productCategoryId !== null &&
-        String(productCategoryId) ===
-          String(selectedId)
-      ) {
-        return true;
-      }
+      return true;
     }
-
     // -------------------------------------------------------
     // CATEGORY NAME
     // -------------------------------------------------------
@@ -557,8 +568,8 @@ function Products({
         aria-label={`Rating ${rating} out of 5`}
       >
         <span className="rating-stars">
-          {"★".repeat(roundedRating)}
-          {"☆".repeat(
+          {"\u2605".repeat(roundedRating)}
+          {"\u2606".repeat(
             5 - roundedRating
           )}
         </span>
@@ -752,10 +763,10 @@ function Products({
     if (
       Number.isNaN(numericPrice)
     ) {
-      return "₹0";
+      return "\u20B90";
     }
 
-    return `₹${numericPrice.toLocaleString(
+    return `\u20B9${numericPrice.toLocaleString(
       "en-IN",
       {
         minimumFractionDigits: 0,
@@ -812,7 +823,7 @@ function Products({
         >
           {loading
             ? "Loading..."
-            : "↻ Refresh"}
+            : "\u{21BB} Refresh"}
         </button>
 
       </div>
@@ -883,7 +894,7 @@ function Products({
         <div className="products-message">
 
           <div className="loading-spinner">
-            ⟳
+            {"\u23F3"}
           </div>
 
           <p>
@@ -901,7 +912,7 @@ function Products({
         <div className="products-error">
 
           <div className="error-icon">
-            ⚠️
+            {"\u26A0\uFE0F"}
           </div>
 
           <h2>
@@ -933,7 +944,7 @@ function Products({
           <div className="products-empty">
 
             <div className="empty-icon">
-              🛍️
+              {"\u{1F6CD}\u{FE0F}"}
             </div>
 
             <h2>
@@ -1082,7 +1093,7 @@ function Products({
                                 "product-placeholder";
 
                               placeholder.textContent =
-                                "🛍️";
+                                "\u{1F6CD}\u{FE0F}";
 
                               parent.appendChild(
                                 placeholder
@@ -1092,7 +1103,7 @@ function Products({
                         />
                       ) : (
                         <div className="product-placeholder">
-                          🛍️
+                          {"\u{1F6CD}\u{FE0F}"}
                         </div>
                       )}
 

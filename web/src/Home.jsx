@@ -79,7 +79,7 @@ function Home({
       setCategoryError("");
 
       const response = await fetch(
-        `${API_BASE_URL}/admin/categories`,
+        `${API_BASE_URL}/categories/`,
         {
           method: "GET",
           headers: {
@@ -118,11 +118,14 @@ function Home({
         list = data;
       }
 
-      // Only show active categories when is_active is provided.
-      list = list.filter(
+      // Show only active main categories on Home.
+      // Subcategories are displayed inside the Categories page.
+        list = list.filter(
         (category) =>
-          category?.is_active === undefined ||
-          category?.is_active === true
+        (category?.is_active === undefined ||
+        category?.is_active === true) &&
+        (category?.parent_id === null ||
+        category?.parent_id === undefined)
       );
 
       console.log("Categories loaded:", list);
@@ -416,10 +419,24 @@ function Home({
       typeof onCategorySelect ===
       "function"
     ) {
+      const subcategoryIds =
+        category.parent_id == null
+          ? categories
+              .filter(
+                (item) =>
+                  item.parent_id != null &&
+                  String(item.parent_id) ===
+                    String(category.id) &&
+                  item.is_active !== false
+              )
+              .map((item) => item.id)
+          : [];
+
       onCategorySelect({
         categoryId: category.id,
         categoryName: category.name,
         categorySlug: category.slug,
+        subcategoryIds,
       });
 
       return;
@@ -692,7 +709,7 @@ function Home({
 
           <div className="brand-header">
             <div className="brand-logo">
-              🧳
+              {"\u{1F6D2}"}
             </div>
 
             <div className="brand-name">
@@ -713,7 +730,7 @@ function Home({
               }
             >
               <div className="shortcut-icon">
-                🛍️
+                {"\u{1F6CD}\u{FE0F}"}
               </div>
 
               <span>
@@ -731,7 +748,7 @@ function Home({
               }
             >
               <div className="shortcut-icon">
-                💳
+                {"\u{1F6CD}\u{FE0F}"}
               </div>
 
               <span>
@@ -763,7 +780,7 @@ function Home({
               }}
             >
               <div className="shortcut-icon">
-                🛒
+                {"\u{1F6CD}\u{FE0F}"}
               </div>
 
               <span>
@@ -777,15 +794,15 @@ function Home({
 
           <div className="location-row">
             <span className="home-icon">
-              ⌂
+              {"\u{1F3E0}"}
             </span>
 
             <span>
-              Home · Delivery available
+              Home {"\u{00B7}"} Delivery available
             </span>
 
             <span className="coin">
-              🪙 16
+              {"\u{1FA99}"} 16
             </span>
           </div>
 
@@ -800,7 +817,7 @@ function Home({
             <div className="search-box">
 
               <span className="search-icon">
-                ⌕
+                {"\u{1F50D}"}
               </span>
 
               <input
@@ -819,12 +836,9 @@ function Home({
                 <button
                   type="button"
                   className="camera-icon"
-                  onClick={() =>
-                    setSearchText("")
-                  }
-                  aria-label="Clear search"
+                  onClick={() => setSearchText("")}
                 >
-                  ×
+                  {"\u{2715}"}
                 </button>
               )}
 
@@ -835,7 +849,7 @@ function Home({
               type="submit"
               aria-label="Search"
             >
-              🔍
+              {"\u{1F50D}"}
             </button>
           </form>
 
@@ -911,7 +925,7 @@ function Home({
             </div>
 
             <div className="promo-phone">
-              📱
+              {"\u{1F50D}"}±
             </div>
 
           </div>
@@ -1037,7 +1051,7 @@ function Home({
                             />
                           ) : (
                             <div className="product-placeholder">
-                              🛍️
+                              {"\u{1F4E6}"}
                             </div>
                           )}
 
@@ -1246,7 +1260,7 @@ function Home({
                                     "no-image";
 
                                   placeholder.textContent =
-                                    "📦";
+                                    "\u{1F4E6}";
 
                                   parent.appendChild(
                                     placeholder
@@ -1257,7 +1271,7 @@ function Home({
                             />
                           ) : (
                             <div className="no-image">
-                              📦
+                              {"\u{1F4E6}"}
                             </div>
                           )}
 
@@ -1286,7 +1300,7 @@ function Home({
                           <div className="product-rating">
 
                             <span className="star">
-                              ★
+                              {"\u{2B50}"}
                             </span>{" "}
 
                             {Number(
@@ -1294,7 +1308,7 @@ function Home({
                                 0
                             ).toFixed(1)}
 
-                            {" · "}
+                            {"\u{00B7}"}
 
                             {product.review_count ||
                               0}
@@ -1442,7 +1456,7 @@ function Home({
             }
           >
             <span>
-              🏠
+              {"\u{1F3E0}"}
             </span>
 
             <small>
@@ -1461,7 +1475,7 @@ function Home({
             }
           >
             <span>
-              ▦
+              {"\u{25A6}"}
             </span>
 
             <small>
@@ -1480,7 +1494,7 @@ function Home({
             }
           >
             <span>
-              👤
+              {"\u{1F464}"}
             </span>
 
             <small>
@@ -1499,7 +1513,7 @@ function Home({
             }
           >
             <span>
-              🛒
+              {"\u{1F6D2}"}
             </span>
 
             <small>

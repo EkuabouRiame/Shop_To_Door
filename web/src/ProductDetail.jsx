@@ -9,6 +9,26 @@ const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
   "https://shop-to-door-backend-294288480400.asia-south2.run.app/api";
 
+const BACKEND_URL = API_BASE_URL.replace(/\/api\/?$/, "");
+
+function resolveImageUrl(image) {
+  if (!image) return "";
+
+  if (
+    image.startsWith("http://") ||
+    image.startsWith("https://") ||
+    image.startsWith("data:")
+  ) {
+    return image;
+  }
+
+  if (image.startsWith("/")) {
+    return `${BACKEND_URL}${image}`;
+  }
+
+  return `${BACKEND_URL}/${image}`;
+}
+
 // =========================================================
 // FORMAT MONEY
 // =========================================================
@@ -230,10 +250,11 @@ function ProductDetail({
     product.product_name ||
     "Product";
 
-  const productImage =
+  const productImage = resolveImageUrl(
     product.image ||
     product.image_url ||
-    "";
+    ""
+  );
 
   const productCategory =
     typeof product.category === "object"

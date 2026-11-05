@@ -12,6 +12,8 @@ class Config:
     # APPLICATION
     # =========================================
 
+    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10 MB
+
     SECRET_KEY = os.getenv(
         "SECRET_KEY",
         "shop-to-door-development-key"

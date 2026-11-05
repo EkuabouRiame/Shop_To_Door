@@ -941,3 +941,28 @@
     padding-right: 8px;
   }
 }
+/* =========================================================
+   CATEGORY BROWSER
+========================================================= */
+
+.category-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 20px;
+  padding: 10px 18px;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #303b50;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.category-back-button:hover {
+  background: #f0f4ff;
+  border-color: #93b4f5;
+  transform: translateX(-2px);
+}

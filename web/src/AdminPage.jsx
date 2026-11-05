@@ -43,13 +43,14 @@ const ALLOWED_IMAGE_EXTENSIONS = [
   ".webp",
 ];
 
-function AdminPage() {
+function AdminPage({ onLogout }) {
   // =====================================================
   // PRODUCTS / CATEGORIES
   // =====================================================
 
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [productMainCategoryId, setProductMainCategoryId] = useState("");
 
   const [productLoading, setProductLoading] = useState(false);
   const [categoryLoading, setCategoryLoading] = useState(false);
@@ -58,8 +59,17 @@ function AdminPage() {
   const [categoryError, setCategoryError] = useState("");
 
   const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryParentId, setNewCategoryParentId] = useState("");
   const [newCategoryDescription, setNewCategoryDescription] =
     useState("");
+
+  const [editingCategoryId, setEditingCategoryId] = useState(null);
+  const [editCategoryForm, setEditCategoryForm] = useState({
+    name: "",
+    description: "",
+    parent_id: "",
+  });
+  const [savingCategoryEdit, setSavingCategoryEdit] = useState(false);
 
   const [newCategoryImage, setNewCategoryImage] = useState(null);
   const [newCategoryImagePreview, setNewCategoryImagePreview] =
@@ -81,6 +91,7 @@ function AdminPage() {
   });
 
   const [productImages, setProductImages] = useState([]);
+  const [editingProductId, setEditingProductId] = useState(null);
 
   // =====================================================
   // ORDERS
@@ -247,23 +258,22 @@ function AdminPage() {
   // =====================================================
 
   const loadProducts = async () => {
-    setProductLoading(true);
-    setProductError("");
+  setProductLoading(true);
+  setProductError("");
 
-    try {
-      const data = await apiRequest(
-        `${API_BASE_URL}/admin/products`
-      );
+  try {
+    const data = await apiRequest(
+      `${API_BASE_URL}/admin/products`
+    );
 
-      setProducts(data.products || []);
-    } catch (error) {
-      console.error(error);
-      setProductError(error.message);
-    } finally {
-      setProductLoading(false);
-    }
-  };
-
+    setProducts(data.products || []);
+  } catch (error) {
+    console.error(error);
+    setProductError(error.message);
+  } finally {
+    setProductLoading(false);
+  }
+};
   // =====================================================
   // LOAD ORDERS
   // =====================================================
@@ -515,6 +525,7 @@ function AdminPage() {
           body: JSON.stringify({
             name: newCategoryName.trim(),
             description: newCategoryDescription.trim(),
+            parent_id: newCategoryParentId ? Number(newCategoryParentId) : null,
           }),
         }
       );
@@ -536,6 +547,7 @@ function AdminPage() {
 
       setNewCategoryName("");
       setNewCategoryDescription("");
+      setNewCategoryParentId("");
       resetCategoryImageInput();
 
       setMessage(
@@ -550,6 +562,106 @@ function AdminPage() {
       setCategoryError(error.message);
     } finally {
       setCategoryLoading(false);
+    }
+  };
+
+  // =====================================================
+  // EDIT CATEGORY
+  // =====================================================
+
+  const getCategoryDescendantIds = (categoryId) => {
+    const descendants = new Set();
+    const pending = [Number(categoryId)];
+
+    while (pending.length > 0) {
+      const currentId = pending.pop();
+
+      categories.forEach((category) => {
+        const id = Number(category.id);
+        const parentId = Number(category.parent_id);
+
+        if (
+          category.parent_id != null &&
+          parentId === currentId &&
+          !descendants.has(id)
+        ) {
+          descendants.add(id);
+          pending.push(id);
+        }
+      });
+    }
+
+    return descendants;
+  };
+
+  const startEditingCategory = (category) => {
+    setCategoryError("");
+    setMessage("");
+    setEditingCategoryId(category.id);
+    setEditCategoryForm({
+      name: category.name || "",
+      description: category.description || "",
+      parent_id: category.parent_id == null
+        ? ""
+        : String(category.parent_id),
+    });
+  };
+
+  const cancelEditingCategory = () => {
+    setEditingCategoryId(null);
+    setEditCategoryForm({
+      name: "",
+      description: "",
+      parent_id: "",
+    });
+    setCategoryError("");
+  };
+
+  const handleSaveCategoryEdit = async (event) => {
+    event.preventDefault();
+
+    if (editingCategoryId == null) return;
+
+    const name = editCategoryForm.name.trim();
+
+    if (!name) {
+      setCategoryError("Category name is required.");
+      return;
+    }
+
+    setCategoryError("");
+    setMessage("");
+    setSavingCategoryEdit(true);
+
+    try {
+      await apiRequest(
+        `${API_BASE_URL}/admin/categories/${editingCategoryId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            name,
+            description: editCategoryForm.description.trim(),
+            parent_id: editCategoryForm.parent_id
+              ? Number(editCategoryForm.parent_id)
+              : null,
+          }),
+        }
+      );
+
+      setEditingCategoryId(null);
+      setEditCategoryForm({
+        name: "",
+        description: "",
+        parent_id: "",
+      });
+
+      setMessage("Category updated successfully.");
+      await loadCategories();
+    } catch (error) {
+      console.error(error);
+      setCategoryError(error.message);
+    } finally {
+      setSavingCategoryEdit(false);
     }
   };
 
@@ -610,7 +722,7 @@ function AdminPage() {
 
   const handleDeleteCategory = async (categoryId) => {
     const confirmed = window.confirm(
-      "Are you sure you want to delete this category? This will also delete products belonging to this category."
+      "Delete this category? Categories containing products or subcategories cannot be deleted until those items are reassigned or removed."
     );
 
     if (!confirmed) {
@@ -650,6 +762,15 @@ function AdminPage() {
       checked,
     } = event.target;
 
+    if (name === "main_category_id") {
+      setProductMainCategoryId(value);
+      setProductForm((previous) => ({
+        ...previous,
+        category_id: "",
+      }));
+      return;
+    }
+
     setProductForm((previous) => ({
       ...previous,
       [name]:
@@ -657,6 +778,62 @@ function AdminPage() {
           ? checked
           : value,
     }));
+  };
+  // =====================================================
+  // EDIT PRODUCT
+  // =====================================================
+
+  const handleEditProduct = (product) => {
+    const selectedSubcategory = categories.find(
+      (category) =>
+        String(category.id) === String(product.category_id)
+    );
+
+    setEditingProductId(product.id);
+
+    setProductMainCategoryId(
+      selectedSubcategory?.parent_id
+        ? String(selectedSubcategory.parent_id)
+        : ""
+    );
+
+    setProductForm({
+      name: product.name || "",
+      sku: product.sku || "",
+      description: product.description || "",
+      price: product.price ?? "",
+      discount_price: product.discount_price ?? "",
+      stock: product.stock ?? "",
+      category_id: String(product.category_id || ""),
+      is_active: Boolean(product.is_active),
+    });
+
+    setProductImages([]);
+    setProductError("");
+    setMessage("");
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  };
+
+  const handleCancelProductEdit = () => {
+    setEditingProductId(null);
+    setProductMainCategoryId("");
+    setProductForm({
+      name: "",
+      sku: "",
+      description: "",
+      price: "",
+      discount_price: "",
+      stock: "",
+      category_id: "",
+      is_active: true,
+    });
+    setProductImages([]);
+    setProductError("");
+    setMessage("");
   };
 
   // =====================================================
@@ -686,17 +863,23 @@ function AdminPage() {
       return;
     }
 
-    if (!productForm.sku.trim()) {
-      setProductError("Product SKU is required.");
-      return;
-    }
-
     if (
       productForm.price === "" ||
       Number(productForm.price) < 0
     ) {
       setProductError(
         "A valid product price is required."
+      );
+      return;
+    }
+
+    if (
+      productForm.stock === "" ||
+      !Number.isInteger(Number(productForm.stock)) ||
+      Number(productForm.stock) < 0
+    ) {
+      setProductError(
+        "A valid nonnegative whole stock quantity is required."
       );
       return;
     }
@@ -708,21 +891,68 @@ function AdminPage() {
       return;
     }
 
-    if (
-      !productImages ||
-      productImages.length === 0
-    ) {
-      setProductError("Product image is required.");
-      return;
+    const imageFile = productImages?.[0] || null;
+
+    if (imageFile) {
+      const imageValidationError =
+        validateImageFile(imageFile);
+
+      if (imageValidationError) {
+        setProductError(imageValidationError);
+        return;
+      }
     }
 
-    const imageFile = productImages[0];
+    // UPDATE EXISTING PRODUCT
+    if (editingProductId !== null) {
+      setProductLoading(true);
+      try {
+        const updateData = {
+          name: productForm.name.trim(),
+          description: productForm.description.trim(),
+          price: Number(productForm.price),
+          discount_price: productForm.discount_price === ""
+            ? null
+            : Number(productForm.discount_price),
+          stock: Number(productForm.stock),
+          category_id: Number(productForm.category_id),
+          is_active: Boolean(productForm.is_active),
+        };
 
-    const imageValidationError =
-      validateImageFile(imageFile);
+        if (productForm.sku.trim()) {
+          updateData.sku = productForm.sku.trim();
+        }
 
-    if (imageValidationError) {
-      setProductError(imageValidationError);
+        const data = await apiRequest(
+          `${API_BASE_URL}/admin/products/${editingProductId}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updateData),
+          }
+        );
+
+        setMessage(data.message || "Product updated successfully.");
+        setEditingProductId(null);
+        setProductMainCategoryId("");
+        setProductForm({
+          name: "",
+          sku: "",
+          description: "",
+          price: "",
+          discount_price: "",
+          stock: "",
+          category_id: "",
+          is_active: true,
+        });
+        setProductImages([]);
+        await loadProducts();
+      } catch (error) {
+        console.error(error);
+        setProductError(error.message);
+      } finally {
+        setProductLoading(false);
+      }
       return;
     }
 
@@ -736,10 +966,9 @@ function AdminPage() {
         productForm.name.trim()
       );
 
-      formData.append(
-        "sku",
-        productForm.sku.trim()
-      );
+      if (productForm.sku.trim()) {
+        formData.append("sku", productForm.sku.trim());
+      }
 
       formData.append(
         "description",
@@ -779,7 +1008,7 @@ function AdminPage() {
         String(productForm.is_active)
       );
 
-      formData.append("image", imageFile);
+      if (imageFile) formData.append("image", imageFile);
 
       const response = await fetch(
         `${API_BASE_URL}/admin/products`,
@@ -817,6 +1046,7 @@ function AdminPage() {
         is_active: true,
       });
 
+      setProductMainCategoryId("");
       setProductImages([]);
 
       const fileInputs =
@@ -1085,7 +1315,7 @@ function AdminPage() {
 
   const formatDate = (date) => {
     if (!date) {
-      return "—";
+      return "-";
     }
 
     try {
@@ -1127,18 +1357,27 @@ function AdminPage() {
           </p>
         </div>
 
-        <button
-          type="button"
-          className="admin-refresh-btn"
-          onClick={() => {
-            loadProducts();
-            loadCategories();
-            loadOrders();
-            loadDeliveryPersons();
-          }}
-        >
-          ↻ Refresh
-        </button>
+        <div className="admin-header-actions">
+          <button
+            type="button"
+            className="admin-refresh-btn"
+            onClick={() => {
+              loadProducts();
+              loadCategories();
+              loadOrders();
+              loadDeliveryPersons();
+            }}
+          >
+            Refresh
+          </button>
+          <button
+            type="button"
+            className="admin-logout-btn"
+            onClick={onLogout}
+          >
+            Logout
+          </button>
+        </div>
       </div>
 
       {/* =================================================
@@ -1410,7 +1649,7 @@ function AdminPage() {
                       <p>
                         <strong>
                           {order.shipping?.name ||
-                            "—"}
+                            "-"}
                         </strong>
                       </p>
 
@@ -1420,9 +1659,9 @@ function AdminPage() {
                       </p>
 
                       <p>
-                        📞{" "}
+                        ðŸ“ž{" "}
                         {order.shipping?.phone ||
-                          "—"}
+                          "-"}
                       </p>
 
                     </div>
@@ -1433,12 +1672,12 @@ function AdminPage() {
 
                       <p>
                         {order.shipping?.address ||
-                          "—"}
+                          "-"}
                       </p>
 
                       <p>
                         {order.shipping?.city ||
-                          "—"}
+                          "-"}
 
                         {order.shipping?.state
                           ? `, ${order.shipping.state}`
@@ -1448,7 +1687,7 @@ function AdminPage() {
                       <p>
                         PIN:{" "}
                         {order.shipping?.pincode ||
-                          "—"}
+                          "-"}
                       </p>
 
                     </div>
@@ -1462,7 +1701,7 @@ function AdminPage() {
                         <strong>
                           {String(
                             order.payment_method ||
-                              "—"
+                              "-"
                           ).toUpperCase()}
                         </strong>
                       </p>
@@ -1495,7 +1734,7 @@ function AdminPage() {
                     <div>
 
                       <h4>
-                        🚚 Delivery Person
+                        ðŸšš Delivery Person
                       </h4>
 
                       {order.delivery_person ? (
@@ -1625,13 +1864,13 @@ function AdminPage() {
                               <small>
                                 SKU:{" "}
                                 {item.product_sku ||
-                                  "—"}
+                                  "-"}
                               </small>
 
                             </div>
 
                             <span>
-                              ×{" "}
+                              Ã—{" "}
                               {item.quantity}
                             </span>
 
@@ -1782,7 +2021,7 @@ function AdminPage() {
             onSubmit={handleAddProduct}
           >
 
-            <h3>Add New Product</h3>
+            <h3>{editingProductId ? "Edit Product" : "Add New Product"}</h3>
 
             <div className="form-grid">
 
@@ -1805,7 +2044,7 @@ function AdminPage() {
                 onChange={
                   handleProductChange
                 }
-                required
+
               />
 
               <input
@@ -1844,34 +2083,44 @@ function AdminPage() {
                 onChange={
                   handleProductChange
                 }
+                required
               />
 
               <select
-                name="category_id"
-                value={
-                  productForm.category_id
-                }
-                onChange={
-                  handleProductChange
-                }
+                name="main_category_id"
+                value={productMainCategoryId}
+                onChange={handleProductChange}
                 required
               >
-
-                <option value="">
-                  Select category
-                </option>
-
-                {categories.map(
-                  (category) => (
-                    <option
-                      key={category.id}
-                      value={category.id}
-                    >
+                <option value="">Select main category</option>
+                {categories
+                  .filter((category) => category.parent_id == null)
+                  .map((category) => (
+                    <option key={category.id} value={String(category.id)}>
                       {category.name}
                     </option>
-                  )
-                )}
+                  ))}
+              </select>
 
+              <select
+                name="category_id"
+                value={productForm.category_id}
+                onChange={handleProductChange}
+                required
+                disabled={!productMainCategoryId}
+              >
+                <option value="">Select subcategory</option>
+                {categories
+                  .filter(
+                    (category) =>
+                      category.parent_id != null &&
+                      String(category.parent_id) === String(productMainCategoryId)
+                  )
+                  .map((category) => (
+                    <option key={category.id} value={String(category.id)}>
+                      {category.name}
+                    </option>
+                  ))}
               </select>
 
             </div>
@@ -1913,8 +2162,12 @@ function AdminPage() {
               type="file"
               accept="image/png,image/jpeg,image/jpg,image/webp"
               onChange={handleImageChange}
-              required
+              required={!editingProductId}
             />
+
+            {editingProductId && (
+              <p>Existing product image will be kept while editing.</p>
+            )}
 
             {productImages.length > 0 && (
               <p>
@@ -1922,13 +2175,23 @@ function AdminPage() {
               </p>
             )}
 
+            {editingProductId !== null && (
+              <button
+                type="button"
+                onClick={handleCancelProductEdit}
+                disabled={productLoading}
+              >
+                Cancel
+              </button>
+            )}
+
             <button
               type="submit"
               disabled={productLoading}
             >
               {productLoading
-                ? "Adding..."
-                : "Add Product"}
+                ? (editingProductId ? "Updating..." : "Adding...")
+                : (editingProductId ? "Update Product" : "Add Product")}
             </button>
 
           </form>
@@ -1973,7 +2236,7 @@ function AdminPage() {
 
                         <td>
                           {product.sku ||
-                            "—"}
+                            "-"}
                         </td>
 
                         <td>
@@ -1988,6 +2251,13 @@ function AdminPage() {
                         </td>
 
                         <td>
+
+                          <button
+                            type="button"
+                            onClick={() => handleEditProduct(product)}
+                          >
+                            Edit
+                          </button>
 
                           <button
                             type="button"
@@ -2063,6 +2333,41 @@ function AdminPage() {
               }
               rows="3"
             />
+
+            <label
+              htmlFor="category-parent-select"
+              style={{
+                display: "block",
+                marginTop: "12px",
+                marginBottom: "6px",
+                fontWeight: "600",
+              }}
+            >
+              Parent category (optional)
+            </label>
+
+            <select
+              id="category-parent-select"
+              value={newCategoryParentId}
+              onChange={(event) =>
+                setNewCategoryParentId(event.target.value)
+              }
+              style={{
+                width: "100%",
+                padding: "10px",
+                marginBottom: "12px",
+              }}
+            >
+              <option value="">None - top-level category</option>
+              {categories.filter((category) => category.parent_id == null).map((category) => (
+                <option
+                  key={category.id}
+                  value={category.id}
+                >
+                  {category.name}
+                </option>
+              ))}
+            </select>
 
             {/* CATEGORY IMAGE */}
 
@@ -2167,9 +2472,104 @@ function AdminPage() {
 
           </form>
 
+            {editingCategoryId !== null && (
+          <form
+            className="admin-form"
+            onSubmit={handleSaveCategoryEdit}
+            style={{
+              marginBottom: "20px",
+              padding: "16px",
+              border: "1px solid #64748b",
+              borderRadius: "8px",
+            }}
+          >
+            <h3>Edit Category (ID: {editingCategoryId})</h3>
+
+            <label htmlFor="edit-category-name">Category name</label>
+            <input
+              id="edit-category-name"
+              type="text"
+              value={editCategoryForm.name}
+              onChange={(event) =>
+                setEditCategoryForm((previous) => ({
+                  ...previous,
+                  name: event.target.value,
+                }))
+              }
+              required
+            />
+
+            <label htmlFor="edit-category-description">Description</label>
+            <textarea
+              id="edit-category-description"
+              value={editCategoryForm.description}
+              onChange={(event) =>
+                setEditCategoryForm((previous) => ({
+                  ...previous,
+                  description: event.target.value,
+                }))
+              }
+              rows={3}
+            />
+
+            <label htmlFor="edit-category-parent-select">Parent category</label>
+            <select
+              id="edit-category-parent-select"
+              value={editCategoryForm.parent_id}
+              onChange={(event) =>
+                setEditCategoryForm((previous) => ({
+                  ...previous,
+                  parent_id: event.target.value,
+                }))
+              }
+            >
+              <option value="">None - top-level category</option>
+              {categories
+                .filter((category) => {
+                  if (category.parent_id != null) return false;
+                  const currentId = Number(editingCategoryId);
+                  const excludedParentIds =
+                    getCategoryDescendantIds(currentId);
+
+                  return (
+                    Number(category.id) !== currentId &&
+                    !excludedParentIds.has(Number(category.id))
+                  );
+                })
+                .map((category) => (
+                  <option key={category.id} value={String(category.id)}>
+                    {category.name}
+                  </option>
+                ))}
+            </select>
+
+            <div
+              style={{
+                display: "flex",
+                gap: "8px",
+                flexWrap: "wrap",
+                marginTop: "12px",
+              }}
+            >
+              <button type="submit" disabled={savingCategoryEdit}>
+                {savingCategoryEdit ? "Saving..." : "Save Changes"}
+              </button>
+
+              <button
+                type="button"
+                onClick={cancelEditingCategory}
+                disabled={savingCategoryEdit}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+
           <div className="admin-table-wrapper">
 
-            <h3>Existing Categories</h3>
+        <h3>Existing Categories</h3>
 
             {categories.length === 0 ? (
               <p>
@@ -2183,6 +2583,7 @@ function AdminPage() {
                     <th>ID</th>
                     <th>Image</th>
                     <th>Name</th>
+                    <th>Parent Category</th>
                     <th>Slug</th>
                     <th>Action</th>
                   </tr>
@@ -2244,8 +2645,18 @@ function AdminPage() {
                         </td>
 
                         <td>
+                          {category.parent_id
+                            ? categories.find(
+                                (parent) =>
+                                  Number(parent.id) ===
+                                  Number(category.parent_id)
+                              )?.name || "Parent not found"
+                            : "-"}
+                        </td>
+
+                        <td>
                           {category.slug ||
-                            "—"}
+                            "-"}
                         </td>
 
                         <td>
@@ -2258,6 +2669,16 @@ function AdminPage() {
                                 "wrap",
                             }}
                           >
+
+                            <button
+                              type="button"
+                              disabled={savingCategoryEdit}
+                              onClick={() =>
+                                startEditingCategory(category)
+                              }
+                            >
+                              Edit
+                            </button>
 
                             <button
                               type="button"
@@ -2413,13 +2834,13 @@ function AdminPage() {
                       </p>
 
                       <p>
-                        📧{" "}
+                        ðŸ“§{" "}
                         {person.email ||
                           "No email"}
                       </p>
 
                       <p>
-                        📞{" "}
+                        ðŸ“ž{" "}
                         {person.phone ||
                           "No phone"}
                       </p>

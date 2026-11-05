@@ -1,6 +1,7 @@
-from flask import Blueprint, jsonify, request
+﻿from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
+from PIL import Image, UnidentifiedImageError
 
 import os
 import uuid
@@ -8,7 +9,9 @@ import re
 
 from sqlalchemy import text
 
+
 from ..config import Config
+from ..media_storage import upload_image, delete_image
 from ..extensions import db
 from ..models import (
     Category,
@@ -34,21 +37,45 @@ admin_bp = Blueprint(
 # HELPER FUNCTIONS
 # =========================================================
 
-def allowed_image(filename):
-    """
-    Check whether the uploaded file has
-    an allowed image extension.
-    """
+def allowed_image(file_storage):
+    """Validate image extension and actual image content."""
 
-    if not filename:
+    if not file_storage or not file_storage.filename:
         return False
+
+    filename = file_storage.filename
 
     if "." not in filename:
         return False
 
     extension = filename.rsplit(".", 1)[1].lower()
 
-    return extension in Config.ALLOWED_IMAGE_EXTENSIONS
+    allowed_formats = {
+        "jpg": "JPEG",
+        "jpeg": "JPEG",
+        "png": "PNG",
+        "webp": "WEBP",
+    }
+
+    if extension not in allowed_formats:
+        return False
+
+    try:
+        file_storage.stream.seek(0)
+
+        with Image.open(file_storage.stream) as image:
+            if image.format != allowed_formats[extension]:
+                return False
+
+            image.verify()
+
+        return True
+
+    except (UnidentifiedImageError, OSError, ValueError):
+        return False
+
+    finally:
+        file_storage.stream.seek(0)
 
 
 # =========================================================
@@ -82,8 +109,11 @@ def get_current_admin():
     if not user:
         return None
 
+    if not user.is_active:
+        return None
+
     if str(
-        user.role or ""
+    user.role or ""
     ).strip().lower() != "admin":
         return None
 
@@ -212,35 +242,116 @@ def product_to_dict(product):
 # =========================================================
 
 def category_to_dict(category):
-    """
-    Convert Category model to JSON-friendly dictionary.
-    """
+    """Convert Category model to a JSON-friendly dictionary.
 
+    parent_id identifies the immediate parent. A null parent_id means the
+    category is a top-level category. Child records are not embedded here so
+    category responses cannot recurse indefinitely.
+    """
     return {
         "id": category.id,
-
         "name": category.name,
-
         "slug": category.slug,
-
         "description": category.description,
-
         "image": category.image,
-
         "is_active": category.is_active,
-
+        "parent_id": category.parent_id,
         "created_at": (
             category.created_at.isoformat()
             if category.created_at
             else None
         ),
-
         "updated_at": (
             category.updated_at.isoformat()
             if category.updated_at
             else None
-        )
+        ),
     }
+
+
+def validate_category_parent(parent_id, current_category_id=None):
+    """Validate an optional parent_id and enforce a two-level hierarchy.
+
+    Returns (parent_id, error_response). When valid, error_response is None.
+    An omitted, empty, or null parent_id makes the category top-level.
+    """
+    if parent_id in (None, ""):
+        return None, None
+
+    try:
+        parent_id = int(parent_id)
+    except (TypeError, ValueError):
+        return None, (jsonify({
+            "status": "error",
+            "message": "Invalid parent_id",
+        }), 400)
+
+    if parent_id <= 0:
+        return None, (jsonify({
+            "status": "error",
+            "message": "Invalid parent_id",
+        }), 400)
+
+    if current_category_id is not None and parent_id == current_category_id:
+        return None, (jsonify({
+            "status": "error",
+            "message": "A category cannot be its own parent",
+        }), 400)
+
+    parent = db.session.get(Category, parent_id)
+    if not parent:
+        return None, (jsonify({
+            "status": "error",
+            "message": "Parent category not found",
+        }), 404)
+
+    # Only top-level categories can be parents.
+    if parent.parent_id is not None:
+        return None, (jsonify({
+            "status": "error",
+            "message": "A subcategory cannot have child categories",
+        }), 400)
+
+    # A category with existing children cannot become a subcategory.
+    if current_category_id is not None:
+        existing_child = Category.query.filter_by(
+            parent_id=current_category_id
+        ).first()
+
+        if existing_child:
+            return None, (jsonify({
+                "status": "error",
+                "message": "A category with subcategories cannot become a subcategory",
+            }), 400)
+
+    # Preserve the existing cycle protection.
+    visited = set()
+    cursor = parent
+
+    while cursor is not None:
+        cursor_id = cursor.id
+
+        if cursor_id in visited:
+            return None, (jsonify({
+                "status": "error",
+                "message": "Existing category hierarchy contains a cycle",
+            }), 409)
+
+        visited.add(cursor_id)
+
+        if current_category_id is not None and cursor_id == current_category_id:
+            return None, (jsonify({
+                "status": "error",
+                "message": "Cannot move a category under one of its descendants",
+            }), 400)
+
+        cursor = (
+            db.session.get(Category, cursor.parent_id)
+            if cursor.parent_id is not None
+            else None
+        )
+
+    return parent_id, None
 
 
 # =========================================================
@@ -385,7 +496,14 @@ def admin_order_to_dict(order):
 # =========================================================
 
 @admin_bp.get("/")
+@jwt_required()
 def admin_home():
+
+    if not get_current_admin():
+        return jsonify({
+            "status": "error",
+            "message": "Administrator access required"
+        }), 403
 
     return jsonify({
 
@@ -404,7 +522,14 @@ def admin_home():
 # =========================================================
 
 @admin_bp.get("/dashboard")
+@jwt_required()
 def dashboard():
+
+    if not get_current_admin():
+        return jsonify({
+            "status": "error",
+            "message": "Administrator access required"
+        }), 403
 
     user_count = (
         db.session.query(User).count()
@@ -676,22 +801,24 @@ def update_admin_order_status(order_id):
 # =========================================================
 
 @admin_bp.get("/categories")
+@jwt_required()
 def get_categories():
+
+    if not get_current_admin():
+        return jsonify({
+            "status": "error",
+            "message": "Administrator access required"
+        }), 403
 
     categories = (
         Category.query
-        .order_by(
-            Category.id.asc()
-        )
+        .order_by(Category.id.asc())
         .all()
     )
 
     return jsonify({
-
         "status": "success",
-
         "count": len(categories),
-
         "categories": [
             category_to_dict(category)
             for category in categories
@@ -704,32 +831,27 @@ def get_categories():
 # GET ONE
 # =========================================================
 
-@admin_bp.get(
-    "/categories/<int:category_id>"
-)
+@admin_bp.get("/categories/<int:category_id>")
+@jwt_required()
 def get_category(category_id):
 
-    category = db.session.get(
-        Category,
-        category_id
-    )
+    if not get_current_admin():
+        return jsonify({
+            "status": "error",
+            "message": "Administrator access required"
+        }), 403
+
+    category = db.session.get(Category, category_id)
 
     if not category:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Category not found"
-
         }), 404
 
     return jsonify({
-
         "status": "success",
-
         "category": category_to_dict(category)
-
     })
 
 
@@ -741,7 +863,10 @@ def get_category(category_id):
 @admin_bp.post(
     "/categories/<int:category_id>/image"
 )
+@jwt_required()
 def upload_category_image(category_id):
+    if not get_current_admin():
+        return jsonify({"status": "error", "message": "Administrator access required"}), 403
 
     # -----------------------------------------------------
     # FIND CATEGORY
@@ -796,7 +921,7 @@ def upload_category_image(category_id):
     # -----------------------------------------------------
 
     if not allowed_image(
-        image_file.filename
+        image_file
     ):
 
         return jsonify({
@@ -811,14 +936,6 @@ def upload_category_image(category_id):
         }), 400
 
     # -----------------------------------------------------
-    # CREATE CATEGORY UPLOAD DIRECTORY
-    # -----------------------------------------------------
-
-    os.makedirs(
-        Config.CATEGORY_UPLOAD_FOLDER,
-        exist_ok=True
-    )
-
     # -----------------------------------------------------
     # SECURE ORIGINAL FILENAME
     # -----------------------------------------------------
@@ -828,13 +945,9 @@ def upload_category_image(category_id):
     )
 
     if not original_filename:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Invalid image filename"
-
         }), 400
 
     # -----------------------------------------------------
@@ -847,47 +960,24 @@ def upload_category_image(category_id):
         f"{original_filename}"
     )
 
-    file_path = os.path.join(
-        Config.CATEGORY_UPLOAD_FOLDER,
-        unique_filename
-    )
-
-    # -----------------------------------------------------
-    # SAVE NEW IMAGE
-    # -----------------------------------------------------
-
-    try:
-
-        image_file.save(
-            file_path
-        )
-
-    except Exception as error:
-
-        return jsonify({
-
-            "status": "error",
-
-            "message": "Unable to save category image",
-
-            "error": str(error)
-
-        }), 500
-
-    # -----------------------------------------------------
-    # REMEMBER OLD IMAGE
-    # -----------------------------------------------------
-
     old_image = category.image
 
     # -----------------------------------------------------
-    # PUBLIC IMAGE URL
+    # UPLOAD TO GOOGLE CLOUD STORAGE
     # -----------------------------------------------------
 
-    image_url = (
-        f"/uploads/categories/"
-        f"{unique_filename}"
-    )
+    try:
+        image_url = upload_image(
+            image_file,
+            "categories",
+            unique_filename
+        )
+    except Exception as error:
+        return jsonify({
+            "status": "error",
+            "message": "Unable to save category image",
+            "error": str(error)
+        }), 500
 
     # -----------------------------------------------------
     # UPDATE DATABASE
@@ -896,33 +986,25 @@ def upload_category_image(category_id):
     category.image = image_url
 
     try:
-
         db.session.commit()
-
     except Exception as error:
-
         db.session.rollback()
 
-        # Remove newly uploaded file
-        if os.path.isfile(file_path):
-
-            try:
-                os.remove(file_path)
-
-            except OSError:
-                pass
+        try:
+            delete_image("categories", unique_filename)
+        except Exception:
+            from flask import current_app
+            current_app.logger.exception(
+                "Unable to clean up uploaded category image after database failure"
+            )
 
         return jsonify({
-
             "status": "error",
-
             "message": (
                 "Unable to save category "
                 "image information"
             ),
-
             "error": str(error)
-
         }), 500
 
     # -----------------------------------------------------
@@ -931,39 +1013,18 @@ def upload_category_image(category_id):
 
     if (
         old_image
-        and old_image.startswith(
-            "/uploads/categories/"
-        )
+        and old_image.startswith("/uploads/categories/")
     ):
+        old_filename = os.path.basename(old_image)
 
-        old_filename = os.path.basename(
-            old_image
-        )
-
-        old_file_path = os.path.join(
-            Config.CATEGORY_UPLOAD_FOLDER,
-            old_filename
-        )
-
-        if (
-            os.path.isfile(
-                old_file_path
-            )
-            and os.path.abspath(old_file_path)
-            != os.path.abspath(file_path)
-        ):
-
+        if old_filename != unique_filename:
             try:
-
-                os.remove(
-                    old_file_path
+                delete_image("categories", old_filename)
+            except Exception:
+                from flask import current_app
+                current_app.logger.exception(
+                    "Unable to delete old category image"
                 )
-
-            except OSError:
-
-                pass
-
-    # -----------------------------------------------------
     # SUCCESS
     # -----------------------------------------------------
 
@@ -991,188 +1052,102 @@ def upload_category_image(category_id):
 # =========================================================
 
 @admin_bp.post("/categories")
+@jwt_required()
 def create_category():
+    if not get_current_admin():
+        return jsonify({"status": "error", "message": "Administrator access required"}), 403
+    data = request.get_json(silent=True) or {}
 
-    data = request.get_json(
-        silent=True
-    ) or {}
+    name = str(data.get("name", "")).strip()
+    description = data.get("description")
+    image = data.get("image")
+    is_active = data.get("is_active", True)
 
-    name = str(
-        data.get(
-            "name",
-            ""
-        )
-    ).strip()
-
-    description = data.get(
-        "description"
-    )
-
-    image = data.get(
-        "image"
-    )
-
-    is_active = data.get(
-        "is_active",
-        True
-    )
-
-    # -----------------------------------------------------
-    # VALIDATE NAME
-    # -----------------------------------------------------
+    if isinstance(is_active, bool):
+        pass
+    elif isinstance(is_active, str):
+        value = is_active.strip().lower()
+        if value in ("true", "1", "yes", "on"):
+            is_active = True
+        elif value in ("false", "0", "no", "off"):
+            is_active = False
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid is_active value",
+            }), 400
+    elif isinstance(is_active, int) and is_active in (0, 1):
+        is_active = bool(is_active)
+    else:
+        return jsonify({
+            "status": "error",
+            "message": "Invalid is_active value",
+        }), 400
 
     if not name:
-
         return jsonify({
-
             "status": "error",
-
-            "message": "Category name is required"
-
+            "message": "Category name is required",
         }), 400
 
-    # -----------------------------------------------------
-    # GENERATE SLUG
-    # -----------------------------------------------------
+    parent_id, parent_error = validate_category_parent(data.get("parent_id"))
+    if parent_error:
+        return parent_error
 
-    slug = str(
-        data.get(
-            "slug",
-            ""
-        )
-    ).strip()
-
+    slug = str(data.get("slug", "")).strip()
     if not slug:
-
         slug = name.lower()
-
-        slug = re.sub(
-            r"[\s_]+",
-            "-",
-            slug
-        )
-
-        slug = re.sub(
-            r"[^a-z0-9-]",
-            "",
-            slug
-        )
-
-        slug = re.sub(
-            r"-+",
-            "-",
-            slug
-        )
-
-        slug = slug.strip("-")
+        slug = re.sub(r"[\s_]+", "-", slug)
+        slug = re.sub(r"[^a-z0-9-]", "", slug)
+        slug = re.sub(r"-+", "-", slug).strip("-")
 
     if not slug:
-
         return jsonify({
-
             "status": "error",
-
-            "message": (
-                "Category slug could not be generated"
-            )
-
+            "message": "Category slug could not be generated",
         }), 400
 
-    # -----------------------------------------------------
-    # DUPLICATE NAME
-    # -----------------------------------------------------
-
-    existing_name = Category.query.filter(
-        Category.name.ilike(
-            name
-        )
-    ).first()
-
+    existing_name = Category.query.filter(Category.name.ilike(name)).first()
     if existing_name:
-
         return jsonify({
-
             "status": "error",
-
-            "message": (
-                "A category with this name "
-                "already exists"
-            )
-
+            "message": "A category with this name already exists",
         }), 409
 
-    # -----------------------------------------------------
-    # DUPLICATE SLUG
-    # -----------------------------------------------------
-
-    existing_slug = Category.query.filter(
-        Category.slug.ilike(
-            slug
-        )
-    ).first()
-
+    existing_slug = Category.query.filter(Category.slug.ilike(slug)).first()
     if existing_slug:
-
         return jsonify({
-
             "status": "error",
-
-            "message": (
-                "A category with this slug "
-                "already exists"
-            )
-
+            "message": "A category with this slug already exists",
         }), 409
-
-    # -----------------------------------------------------
-    # CREATE CATEGORY
-    # -----------------------------------------------------
 
     category = Category(
-
         name=name,
-
         slug=slug,
-
         description=description,
-
         image=image,
-
-        is_active=is_active
+        is_active=is_active,
+        parent_id=parent_id,
     )
 
     try:
-
-        db.session.add(
-            category
-        )
-
+        db.session.add(category)
         db.session.commit()
-
-    except Exception as error:
-
+    except Exception:
         db.session.rollback()
 
+        from flask import current_app
+        current_app.logger.exception("Unable to create category")
+
         return jsonify({
-
             "status": "error",
-
             "message": "Unable to create category",
-
-            "error": str(error)
-
         }), 409
 
     return jsonify({
-
         "status": "success",
-
         "message": "Category created successfully",
-
-        "category": category_to_dict(
-            category
-        )
-
+        "category": category_to_dict(category),
     }), 201
 
 
@@ -1184,164 +1159,114 @@ def create_category():
 @admin_bp.put(
     "/categories/<int:category_id>"
 )
+@jwt_required()
 def update_category(category_id):
-
-    category = db.session.get(
-        Category,
-        category_id
-    )
-
+    if not get_current_admin():
+        return jsonify({"status": "error", "message": "Administrator access required"}), 403
+    category = db.session.get(Category, category_id)
     if not category:
-
         return jsonify({
-
             "status": "error",
-
-            "message": "Category not found"
-
+            "message": "Category not found",
         }), 404
 
-    data = request.get_json(
-        silent=True
-    ) or {}
+    data = request.get_json(silent=True) or {}
 
-    # -----------------------------------------------------
-    # NAME
-    # -----------------------------------------------------
+    if "parent_id" in data:
+        parent_id, parent_error = validate_category_parent(
+            data.get("parent_id"),
+            current_category_id=category_id,
+        )
+        if parent_error:
+            return parent_error
+        category.parent_id = parent_id
 
     if "name" in data:
-
-        name = str(
-            data["name"]
-        ).strip()
-
+        name = str(data["name"]).strip()
         if not name:
-
             return jsonify({
-
                 "status": "error",
-
-                "message": (
-                    "Category name cannot be empty"
-                )
-
+                "message": "Category name cannot be empty",
             }), 400
 
         duplicate = Category.query.filter(
-
-            Category.name.ilike(
-                name
-            ),
-
-            Category.id != category_id
-
+            Category.name.ilike(name),
+            Category.id != category_id,
         ).first()
-
         if duplicate:
-
             return jsonify({
-
                 "status": "error",
-
-                "message": (
-                    "A category with this name "
-                    "already exists"
-                )
-
+                "message": "A category with this name already exists",
             }), 409
-
         category.name = name
 
-    # -----------------------------------------------------
-    # SLUG
-    # -----------------------------------------------------
-
     if "slug" in data:
-
-        slug = str(
-            data["slug"]
-        ).strip()
-
+        slug = str(data["slug"]).strip()
         if not slug:
-
             return jsonify({
-
                 "status": "error",
-
-                "message": (
-                    "Category slug cannot be empty"
-                )
-
+                "message": "Category slug cannot be empty",
             }), 400
 
         duplicate = Category.query.filter(
-
-            Category.slug.ilike(
-                slug
-            ),
-
-            Category.id != category_id
-
+            Category.slug.ilike(slug),
+            Category.id != category_id,
         ).first()
-
         if duplicate:
-
             return jsonify({
-
                 "status": "error",
-
-                "message": (
-                    "A category with this slug "
-                    "already exists"
-                )
-
+                "message": "A category with this slug already exists",
             }), 409
-
         category.slug = slug
 
-    # -----------------------------------------------------
-    # DESCRIPTION
-    # -----------------------------------------------------
-
     if "description" in data:
-
-        category.description = (
-            data["description"]
-        )
-
-    # -----------------------------------------------------
-    # IMAGE URL
-    # -----------------------------------------------------
+        category.description = data["description"]
 
     if "image" in data:
-
-        category.image = (
-            data["image"]
-        )
-
-    # -----------------------------------------------------
-    # ACTIVE STATUS
-    # -----------------------------------------------------
+        category.image = data["image"]
 
     if "is_active" in data:
+        value = data["is_active"]
 
-        category.is_active = bool(
-            data["is_active"]
-        )
+        if isinstance(value, bool):
+            category.is_active = value
+        elif isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in ("true", "1", "yes", "on"):
+                category.is_active = True
+            elif normalized in ("false", "0", "no", "off"):
+                category.is_active = False
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": "Invalid is_active value",
+                }), 400
+        elif isinstance(value, int) and value in (0, 1):
+            category.is_active = bool(value)
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid is_active value",
+            }), 400
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+        from flask import current_app
+        current_app.logger.exception("Unable to update category")
+
+        return jsonify({
+            "status": "error",
+            "message": "Unable to update category",
+        }), 409
 
     return jsonify({
-
         "status": "success",
-
         "message": "Category updated successfully",
-
-        "category": category_to_dict(
-            category
-        )
-
-    })
+        "category": category_to_dict(category),
+    }), 200
 
 
 # =========================================================
@@ -1352,195 +1277,99 @@ def update_category(category_id):
 @admin_bp.delete(
     "/categories/<int:category_id>"
 )
+@jwt_required()
 def delete_category(category_id):
+    if not get_current_admin():
+        return jsonify({
+            "status": "error",
+            "message": "Administrator access required"
+        }), 403
 
-    category = db.session.get(
-        Category,
-        category_id
-    )
+    category = db.session.get(Category, category_id)
 
     if not category:
-
         return jsonify({
-
             "status": "error",
-
-            "message": "Category not found"
-
+            "message": "Category not found",
         }), 404
 
-    # -----------------------------------------------------
-    # FIND ALL PRODUCTS IN CATEGORY
-    # -----------------------------------------------------
+    # Do not delete categories that still contain products or child categories.
+    product_count = Product.query.filter_by(category_id=category_id).count()
+    child_count = Category.query.filter_by(parent_id=category_id).count()
 
-    products = (
-        Product.query
-        .filter_by(
-            category_id=category_id
-        )
-        .all()
-    )
-
-    deleted_product_count = 0
-    deleted_image_count = 0
-
-    try:
-
-        # -------------------------------------------------
-        # DELETE CATEGORY IMAGE
-        # -------------------------------------------------
-
-        if (
-            category.image
-            and category.image.startswith(
-                "/uploads/categories/"
-            )
-        ):
-
-            category_filename = os.path.basename(
-                category.image
-            )
-
-            category_image_file = os.path.join(
-                Config.CATEGORY_UPLOAD_FOLDER,
-                category_filename
-            )
-
-            if os.path.isfile(
-                category_image_file
-            ):
-
-                try:
-
-                    os.remove(
-                        category_image_file
-                    )
-
-                except OSError:
-
-                    pass
-
-        # -------------------------------------------------
-        # DELETE PRODUCTS AND THEIR IMAGES
-        # -------------------------------------------------
-
-        for product in products:
-
-            images = (
-                ProductImage.query
-                .filter_by(
-                    product_id=product.id
-                )
-                .all()
-            )
-
-            # ---------------------------------------------
-            # DELETE PHYSICAL PRODUCT IMAGE FILES
-            # ---------------------------------------------
-
-            for image in images:
-
-                if (
-                    image.image_url
-                    and image.image_url.startswith(
-                        "/uploads/products/"
-                    )
-                ):
-
-                    filename = os.path.basename(
-                        image.image_url
-                    )
-
-                    physical_file = os.path.join(
-                        Config.PRODUCT_UPLOAD_FOLDER,
-                        filename
-                    )
-
-                    if os.path.isfile(
-                        physical_file
-                    ):
-
-                        try:
-
-                            os.remove(
-                                physical_file
-                            )
-
-                        except OSError:
-
-                            pass
-
-                db.session.delete(
-                    image
-                )
-
-                deleted_image_count += 1
-
-            db.session.flush()
-
-            db.session.delete(
-                product
-            )
-
-            deleted_product_count += 1
-
-        db.session.flush()
-
-        db.session.delete(
-            category
-        )
-
-        db.session.commit()
-
-    except Exception as error:
-
-        db.session.rollback()
-
+    if product_count or child_count:
         return jsonify({
-
             "status": "error",
-
-            "message": "Unable to delete category",
-
-            "error": str(error)
-
+            "message": (
+                "Cannot delete a category that has products or subcategories. "
+                "Move or delete those items first."
+            ),
+            "product_count": product_count,
+            "subcategory_count": child_count,
         }), 409
 
+    # Remember the category image before deleting the database record.
+    image_filename = None
+
+    if (
+        category.image
+        and category.image.startswith("/uploads/categories/")
+    ):
+        image_filename = os.path.basename(category.image)
+
+    try:
+        db.session.delete(category)
+        db.session.commit()
+    except Exception as error:
+        db.session.rollback()
+        return jsonify({
+            "status": "error",
+            "message": "Unable to delete category",
+            "error": str(error),
+        }), 409
+
+    # Delete the stored image only after the database deletion succeeds.
+    if image_filename:
+        try:
+            delete_image("categories", image_filename)
+        except Exception:
+            from flask import current_app
+            current_app.logger.exception(
+                "Unable to delete category image from media storage"
+            )
+
     return jsonify({
-
         "status": "success",
-
         "message": "Category deleted successfully",
-
-        "deleted_products": deleted_product_count,
-
-        "deleted_product_images": deleted_image_count
-
+        "deleted_products": 0,
+        "deleted_product_images": 0,
     }), 200
 
-
+# =========================================================
 # =========================================================
 # PRODUCT
 # LIST ALL
 # =========================================================
 
 @admin_bp.get("/products")
+@jwt_required()
 def get_products():
+
+    if not get_current_admin():
+        return jsonify({
+            "status": "error",
+            "message": "Administrator access required"
+        }), 403
 
     products = (
         Product.query
-        .order_by(
-            Product.id.asc()
-        )
+        .order_by(Product.id.asc())
         .all()
     )
 
     return jsonify({
-
         "status": "success",
-
         "count": len(products),
-
         "products": [
             product_to_dict(product)
             for product in products
@@ -1553,34 +1382,27 @@ def get_products():
 # GET ONE
 # =========================================================
 
-@admin_bp.get(
-    "/products/<int:product_id>"
-)
+@admin_bp.get("/products/<int:product_id>")
+@jwt_required()
 def get_product(product_id):
 
-    product = db.session.get(
-        Product,
-        product_id
-    )
+    if not get_current_admin():
+        return jsonify({
+            "status": "error",
+            "message": "Administrator access required"
+        }), 403
+
+    product = db.session.get(Product, product_id)
 
     if not product:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Product not found"
-
         }), 404
 
     return jsonify({
-
         "status": "success",
-
-        "product": product_to_dict(
-            product
-        )
-
+        "product": product_to_dict(product)
     })
 
 
@@ -1590,7 +1412,10 @@ def get_product(product_id):
 # =========================================================
 
 @admin_bp.post("/products")
+@jwt_required()
 def create_product():
+    if not get_current_admin():
+        return jsonify({"status": "error", "message": "Administrator access required"}), 403
 
     # -----------------------------------------------------
     # READ FORM DATA
@@ -1633,7 +1458,7 @@ def create_product():
     if image_file:
 
         if not allowed_image(
-            image_file.filename
+            image_file
         ):
 
             return jsonify({
@@ -1818,6 +1643,26 @@ def create_product():
         }), 404
 
     # -----------------------------------------------------
+    # CATEGORY VALIDATION
+    # -----------------------------------------------------
+    if category.parent_id is None:
+        return jsonify({
+        "status": "error",
+        "message": "Please select a subcategory for the product"
+    }), 400
+
+    if not category.is_active:
+        return jsonify({
+        "status": "error",
+        "message": "Please select an active subcategory"
+    }), 400
+
+    if not category.parent or not category.parent.is_active:
+        return jsonify({
+        "status": "error",
+        "message": "The parent category is inactive"
+    }), 400
+
     # PRICE
     # -----------------------------------------------------
 
@@ -2004,7 +1849,7 @@ def create_product():
     # -----------------------------------------------------
 
     image_url = None
-    file_path = None
+    uploaded_filename = None
 
     # -----------------------------------------------------
     # SAVE IMAGE ONLY WHEN PROVIDED
@@ -2012,36 +1857,15 @@ def create_product():
 
     if image_file:
 
-        # -------------------------------------------------
-        # CREATE UPLOAD DIRECTORY
-        # -------------------------------------------------
-
-        os.makedirs(
-            Config.PRODUCT_UPLOAD_FOLDER,
-            exist_ok=True
-        )
-
-        # -------------------------------------------------
-        # SECURE ORIGINAL FILENAME
-        # -------------------------------------------------
-
         original_filename = secure_filename(
             image_file.filename
         )
 
         if not original_filename:
-
             return jsonify({
-
                 "status": "error",
-
                 "message": "Invalid image filename"
-
             }), 400
-
-        # -------------------------------------------------
-        # UNIQUE IMAGE FILENAME
-        # -------------------------------------------------
 
         unique_filename = (
             f"new_product_"
@@ -2049,43 +1873,20 @@ def create_product():
             f"{original_filename}"
         )
 
-        file_path = os.path.join(
-            Config.PRODUCT_UPLOAD_FOLDER,
-            unique_filename
-        )
-
-        # -------------------------------------------------
-        # SAVE IMAGE FILE
-        # -------------------------------------------------
-
         try:
-
-            image_file.save(
-                file_path
+            image_url = upload_image(
+                image_file,
+                "products",
+                unique_filename
             )
+            uploaded_filename = unique_filename
 
         except Exception as error:
-
             return jsonify({
-
                 "status": "error",
-
                 "message": "Unable to save product image",
-
                 "error": str(error)
-
             }), 500
-
-        # -------------------------------------------------
-        # PUBLIC IMAGE URL
-        # -------------------------------------------------
-
-        image_url = (
-            f"/uploads/products/"
-            f"{unique_filename}"
-        )
-
-    # -----------------------------------------------------
     # CREATE PRODUCT
     # -----------------------------------------------------
 
@@ -2163,23 +1964,14 @@ def create_product():
 
         db.session.rollback()
 
-        if (
-            file_path
-            and os.path.isfile(
-                file_path
-            )
-        ):
-
+        if uploaded_filename:
             try:
-
-                os.remove(
-                    file_path
+                delete_image("products", uploaded_filename)
+            except Exception:
+                from flask import current_app
+                current_app.logger.exception(
+                    "Unable to clean up product image after database failure"
                 )
-
-            except OSError:
-
-                pass
-
         return jsonify({
 
             "status": "error",
@@ -2211,7 +2003,12 @@ def create_product():
 @admin_bp.put(
     "/products/<int:product_id>"
 )
+@jwt_required()
+
 def update_product(product_id):
+
+    if not get_current_admin():
+        return jsonify({'status': 'error', 'message': 'Administrator access required'}), 403
 
     product = db.session.get(
         Product,
@@ -2478,6 +2275,25 @@ def update_product(product_id):
 
             }), 404
 
+
+        if category.parent_id is None:
+            return jsonify({
+            "status": "error",
+            "message": "Please select a subcategory for the product"
+        }), 400
+
+        if not category.is_active:
+            return jsonify({
+            "status": "error",
+            "message": "Please select an active subcategory"
+        }), 400
+
+        if not category.parent or not category.parent.is_active:
+            return jsonify({
+            "status": "error",
+            "message": "The parent category is inactive"
+        }), 400
+
         product.category_id = category_id
 
     # -----------------------------------------------------
@@ -2561,7 +2377,11 @@ def update_product(product_id):
 @admin_bp.delete(
     "/products/<int:product_id>"
 )
+@jwt_required()
 def delete_product(product_id):
+
+    if not get_current_admin():
+        return jsonify({'status': 'error', 'message': 'Administrator access required'}), 403
 
     product = db.session.get(
         Product,
@@ -2646,8 +2466,10 @@ def delete_product(product_id):
         deleted_image_count = 0
 
         # -------------------------------------------------
-        # DELETE PHYSICAL IMAGE FILES
+        # COLLECT STORED IMAGE FILES FOR LATER CLEANUP
         # -------------------------------------------------
+
+        image_filenames_to_delete = []
 
         for image in images:
 
@@ -2662,24 +2484,8 @@ def delete_product(product_id):
                     image.image_url
                 )
 
-                physical_file = os.path.join(
-                    Config.PRODUCT_UPLOAD_FOLDER,
-                    filename
-                )
-
-                if os.path.isfile(
-                    physical_file
-                ):
-
-                    try:
-
-                        os.remove(
-                            physical_file
-                        )
-
-                    except OSError:
-
-                        pass
+                if filename:
+                    image_filenames_to_delete.append(filename)
 
         # -------------------------------------------------
         # DELETE IMAGE DATABASE RECORDS
@@ -2704,6 +2510,20 @@ def delete_product(product_id):
         )
 
         db.session.commit()
+
+        # -------------------------------------------------
+        # DELETE STORED IMAGE FILES AFTER DATABASE COMMIT
+        # -------------------------------------------------
+
+        for filename in image_filenames_to_delete:
+
+            try:
+                delete_image("products", filename)
+            except Exception:
+                from flask import current_app
+                current_app.logger.exception(
+                    "Unable to delete product image from media storage"
+                )
 
     except Exception as error:
 
@@ -2742,7 +2562,14 @@ def delete_product(product_id):
 @admin_bp.get(
     "/products/<int:product_id>/images"
 )
+@jwt_required()
 def get_product_images(product_id):
+
+    if not get_current_admin():
+        return jsonify({
+            "status": "error",
+            "message": "Administrator access required"
+        }), 403
 
     product = db.session.get(
         Product,
@@ -2798,7 +2625,11 @@ def get_product_images(product_id):
 @admin_bp.post(
     "/products/<int:product_id>/images"
 )
+@jwt_required()
 def add_product_image(product_id):
+
+    if not get_current_admin():
+        return jsonify({'status': 'error', 'message': 'Administrator access required'}), 403
 
     product = db.session.get(
         Product,
@@ -2896,11 +2727,23 @@ def add_product_image(product_id):
         )
     )
 
-    db.session.add(
-        image
-    )
+    db.session.add(image)
+    try:
+        db.session.commit()
+    except Exception:
+        from flask import current_app
 
-    db.session.commit()
+        db.session.rollback()
+
+
+        current_app.logger.exception(
+            "Unable to save product image record"
+        )
+
+        return jsonify({
+            "status": "error",
+            "message": "Unable to save product image",
+        }), 500
 
     return jsonify({
 
@@ -2925,11 +2768,15 @@ def add_product_image(product_id):
 @admin_bp.post(
     "/products/<int:product_id>/images/upload"
 )
+@jwt_required()
 def upload_product_image(product_id):
 
     # -----------------------------------------------------
     # FIND PRODUCT
     # -----------------------------------------------------
+
+    if not get_current_admin():
+        return jsonify({'status': 'error', 'message': 'Administrator access required'}), 403
 
     product = db.session.get(
         Product,
@@ -2980,7 +2827,7 @@ def upload_product_image(product_id):
     # -----------------------------------------------------
 
     if not allowed_image(
-        file.filename
+        file
     ):
 
         return jsonify({
@@ -2995,14 +2842,6 @@ def upload_product_image(product_id):
         }), 400
 
     # -----------------------------------------------------
-    # CREATE UPLOAD DIRECTORY
-    # -----------------------------------------------------
-
-    os.makedirs(
-        Config.PRODUCT_UPLOAD_FOLDER,
-        exist_ok=True
-    )
-
     # -----------------------------------------------------
     # SECURE FILENAME
     # -----------------------------------------------------
@@ -3034,21 +2873,16 @@ def upload_product_image(product_id):
         f"{original_filename}"
     )
 
-    file_path = os.path.join(
-
-        Config.PRODUCT_UPLOAD_FOLDER,
-
-        unique_filename
-    )
-
     # -----------------------------------------------------
-    # SAVE FILE
+    # UPLOAD TO GOOGLE CLOUD STORAGE
     # -----------------------------------------------------
 
     try:
 
-        file.save(
-            file_path
+        image_url = upload_image(
+            file,
+            "products",
+            unique_filename
         )
 
     except Exception as error:
@@ -3062,17 +2896,6 @@ def upload_product_image(product_id):
             "error": str(error)
 
         }), 500
-
-    # -----------------------------------------------------
-    # PUBLIC URL
-    # -----------------------------------------------------
-
-    image_url = (
-
-        f"/uploads/products/"
-        f"{unique_filename}"
-    )
-
     # -----------------------------------------------------
     # EXISTING IMAGES
     # -----------------------------------------------------
@@ -3136,11 +2959,30 @@ def upload_product_image(product_id):
         display_order=existing_image_count
     )
 
-    db.session.add(
-        image
-    )
+    db.session.add(image)
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception:
+        from flask import current_app
+
+        db.session.rollback()
+
+        try:
+            delete_image("products", unique_filename)
+        except Exception:
+            current_app.logger.exception(
+                "Unable to clean up uploaded product image after database failure"
+            )
+
+        current_app.logger.exception(
+            "Unable to save product image record"
+        )
+
+        return jsonify({
+            "status": "error",
+            "message": "Unable to save product image",
+        }), 500
 
     return jsonify({
 
@@ -3169,10 +3011,14 @@ def upload_product_image(product_id):
 @admin_bp.put(
     "/products/<int:product_id>/images/<int:image_id>/primary"
 )
+@jwt_required()
 def set_primary_product_image(
     product_id,
     image_id
 ):
+
+    if not get_current_admin():
+        return jsonify({'status': 'error', 'message': 'Administrator access required'}), 403
 
     product = db.session.get(
         Product,
@@ -3228,7 +3074,18 @@ def set_primary_product_image(
 
     product.image = image.image_url
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception:
+        from flask import current_app
+        db.session.rollback()
+        current_app.logger.exception(
+            "Unable to update primary product image"
+        )
+        return jsonify({
+            "status": "error",
+            "message": "Unable to update primary product image",
+        }), 500
 
     return jsonify({
 
@@ -3253,10 +3110,14 @@ def set_primary_product_image(
 @admin_bp.delete(
     "/products/<int:product_id>/images/<int:image_id>"
 )
+@jwt_required()
 def delete_product_image(
     product_id,
     image_id
 ):
+
+    if not get_current_admin():
+        return jsonify({'status': 'error', 'message': 'Administrator access required'}), 403
 
     product = db.session.get(
         Product,
@@ -3347,10 +3208,21 @@ def delete_product_image(
 
             product.image = None
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception:
+        from flask import current_app
+        db.session.rollback()
+        current_app.logger.exception(
+            "Unable to delete product image record"
+        )
+        return jsonify({
+            "status": "error",
+            "message": "Unable to delete product image",
+        }), 500
 
     # -----------------------------------------------------
-    # DELETE PHYSICAL FILE
+    # DELETE STORED FILE
     # -----------------------------------------------------
 
     if (
@@ -3364,27 +3236,13 @@ def delete_product_image(
             image_url
         )
 
-        physical_file = os.path.join(
-
-            Config.PRODUCT_UPLOAD_FOLDER,
-
-            filename
-        )
-
-        if os.path.isfile(
-            physical_file
-        ):
-
-            try:
-
-                os.remove(
-                    physical_file
-                )
-
-            except OSError:
-
-                pass
-
+        try:
+            delete_image("products", filename)
+        except Exception:
+            from flask import current_app
+            current_app.logger.exception(
+                "Unable to delete product image from media storage"
+            )
     return jsonify({
 
         "status": "success",

@@ -1317,3 +1317,43 @@
     grid-column: 2;
   }
 }
+
+/* Admin header action buttons */
+.admin-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.admin-header-actions .admin-refresh-btn,
+.admin-header-actions .admin-logout-btn {
+  min-height: 40px;
+  padding: 10px 18px !important;
+  border-radius: 10px !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  line-height: 20px;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.admin-header-actions .admin-logout-btn {
+  border: 1px solid #fecaca !important;
+  background: #fff1f2 !important;
+  color: #dc2626 !important;
+  box-shadow: none !important;
+}
+
+.admin-header-actions .admin-logout-btn:hover {
+  background: #ffe4e6 !important;
+  transform: translateY(-1px);
+}
+
+@media (max-width: 600px) {
+  .admin-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

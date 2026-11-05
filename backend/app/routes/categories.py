@@ -1,3 +1,4 @@
+
 from flask import Blueprint, jsonify
 
 from ..extensions import db
@@ -19,6 +20,7 @@ def category_to_dict(category, include_products=False):
 
     data = {
         "id": category.id,
+        "parent_id": category.parent_id,
         "name": category.name,
         "slug": category.slug,
         "description": category.description,
@@ -40,10 +42,20 @@ def category_to_dict(category, include_products=False):
 
     if include_products:
 
+        category_ids = [category.id]
+
+        # Main categories include products from direct subcategories.
+        if category.parent_id is None:
+            category_ids.extend(
+                subcategory.id
+                for subcategory in category.children
+                if subcategory.is_active
+            )
+
         products = (
             db.session.query(Product)
             .filter(
-                Product.category_id == category.id,
+                Product.category_id.in_(category_ids),
                 Product.is_active.is_(True)
             )
             .order_by(Product.created_at.desc())

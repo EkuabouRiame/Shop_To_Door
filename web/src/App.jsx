@@ -10,6 +10,9 @@ import Home from "./Home";
 import Checkout from "./Checkout";
 import DeliveryConfirmation from "./DeliveryConfirmation";
 import ProductDetails from "./ProductDetail";
+import PrivacyPolicy from "./PrivacyPolicy.jsx";
+import DeleteAccount from "./DeleteAccount.jsx";
+import Categories from "./Categories";
 
 import {
   getToken,
@@ -820,6 +823,18 @@ function handleProductClick(product) {
   }
 
   // =======================================================
+  // PUBLIC PRIVACY POLICY PAGE
+  // =======================================================
+
+  if (window.location.pathname.replace(/\/+$/, "") === "/privacy-policy") {
+    return <PrivacyPolicy />;
+  }
+
+  if (window.location.pathname.replace(/\/+$/, "") === "/delete-account") {
+    return <DeleteAccount />;
+  }
+
+  // =======================================================
   // LOADING SCREEN
   // =======================================================
 
@@ -1047,7 +1062,7 @@ function handleProductClick(product) {
         {/* ADMIN PAGE */}
 
         <main>
-          <AdminPage />
+          <AdminPage onLogout={handleLogout} />
         </main>
       </div>
     );
@@ -1395,26 +1410,19 @@ function handleProductClick(product) {
           CATEGORIES
       ================================================= */}
 
-      {currentPage ===
-        "categories" && (
-        <main
-          style={{
-            maxWidth: "1200px",
-            margin: "0 auto",
-            padding:
-              "25px 20px",
-          }}
-        >
-          <Products
-            selectedCategory={
-              selectedCategory
-            }
-            onProductClick={
-              handleProductClick
-            }
-          />
-        </main>
-      )}
+      {currentPage === "categories" && (
+      <main
+      style={{
+      maxWidth: "1200px",
+      margin: "0 auto",
+      padding: "25px 20px",
+      }}
+    >
+    <Categories
+      onProductClick={handleProductClick}
+    />
+    </main>
+  )}
 
       {/* =================================================
           PRODUCTS
@@ -3166,7 +3174,7 @@ function MyOrders({ onBack }) {
                               >
                                 {item.product_name ||
                                   "Product"}{" "}
-                                ×{" "}
+                                ×
                                 {quantity}
                               </span>
 
