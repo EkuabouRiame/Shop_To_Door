@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
 
@@ -34,21 +34,33 @@ admin_bp = Blueprint(
 # HELPER FUNCTIONS
 # =========================================================
 
-def allowed_image(filename):
-    """
-    Check whether the uploaded file has
-    an allowed image extension.
-    """
+from ..media_storage import upload_image, delete_image
 
-    if not filename:
+
+def allowed_image(file_storage):
+    """
+    Check whether the uploaded file has an allowed image extension.
+    Image content is verified by upload_image().
+    """
+    if not file_storage or not file_storage.filename:
         return False
 
+    filename = file_storage.filename
     if "." not in filename:
         return False
 
     extension = filename.rsplit(".", 1)[1].lower()
-
     return extension in Config.ALLOWED_IMAGE_EXTENSIONS
+
+
+def safely_delete_image(folder, filename):
+    """Delete a stored image without undoing a successful DB operation."""
+    try:
+        delete_image(folder, filename)
+    except Exception:
+        current_app.logger.exception(
+            "Unable to delete image from Cloud Storage"
+        )
 
 
 # =========================================================
@@ -795,9 +807,7 @@ def upload_category_image(category_id):
     # VALIDATE IMAGE FORMAT
     # -----------------------------------------------------
 
-    if not allowed_image(
-        image_file.filename
-    ):
+    if not allowed_image(image_file):
 
         return jsonify({
 
@@ -811,30 +821,15 @@ def upload_category_image(category_id):
         }), 400
 
     # -----------------------------------------------------
-    # CREATE CATEGORY UPLOAD DIRECTORY
-    # -----------------------------------------------------
-
-    os.makedirs(
-        Config.CATEGORY_UPLOAD_FOLDER,
-        exist_ok=True
-    )
-
-    # -----------------------------------------------------
     # SECURE ORIGINAL FILENAME
     # -----------------------------------------------------
 
-    original_filename = secure_filename(
-        image_file.filename
-    )
+    original_filename = secure_filename(image_file.filename)
 
     if not original_filename:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Invalid image filename"
-
         }), 400
 
     # -----------------------------------------------------
@@ -847,31 +842,21 @@ def upload_category_image(category_id):
         f"{original_filename}"
     )
 
-    file_path = os.path.join(
-        Config.CATEGORY_UPLOAD_FOLDER,
-        unique_filename
-    )
-
     # -----------------------------------------------------
-    # SAVE NEW IMAGE
+    # UPLOAD IMAGE TO CLOUD STORAGE
     # -----------------------------------------------------
 
     try:
-
-        image_file.save(
-            file_path
+        image_url = upload_image(
+            image_file,
+            "categories",
+            unique_filename
         )
-
     except Exception as error:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Unable to save category image",
-
             "error": str(error)
-
         }), 500
 
     # -----------------------------------------------------
@@ -879,15 +864,6 @@ def upload_category_image(category_id):
     # -----------------------------------------------------
 
     old_image = category.image
-
-    # -----------------------------------------------------
-    # PUBLIC IMAGE URL
-    # -----------------------------------------------------
-
-    image_url = (
-        f"/uploads/categories/"
-        f"{unique_filename}"
-    )
 
     # -----------------------------------------------------
     # UPDATE DATABASE
@@ -903,14 +879,7 @@ def upload_category_image(category_id):
 
         db.session.rollback()
 
-        # Remove newly uploaded file
-        if os.path.isfile(file_path):
-
-            try:
-                os.remove(file_path)
-
-            except OSError:
-                pass
+        safely_delete_image("categories", unique_filename)
 
         return jsonify({
 
@@ -940,28 +909,8 @@ def upload_category_image(category_id):
             old_image
         )
 
-        old_file_path = os.path.join(
-            Config.CATEGORY_UPLOAD_FOLDER,
-            old_filename
-        )
-
-        if (
-            os.path.isfile(
-                old_file_path
-            )
-            and os.path.abspath(old_file_path)
-            != os.path.abspath(file_path)
-        ):
-
-            try:
-
-                os.remove(
-                    old_file_path
-                )
-
-            except OSError:
-
-                pass
+        if old_filename != unique_filename:
+            safely_delete_image("categories", old_filename)
 
     # -----------------------------------------------------
     # SUCCESS
@@ -1360,136 +1309,61 @@ def delete_category(category_id):
     )
 
     if not category:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Category not found"
-
         }), 404
-
-    # -----------------------------------------------------
-    # FIND ALL PRODUCTS IN CATEGORY
-    # -----------------------------------------------------
 
     products = (
         Product.query
-        .filter_by(
-            category_id=category_id
-        )
+        .filter_by(category_id=category_id)
         .all()
     )
 
     deleted_product_count = 0
     deleted_image_count = 0
 
+    category_filename = None
+    product_filenames = []
+
     try:
 
-        # -------------------------------------------------
-        # DELETE CATEGORY IMAGE
-        # -------------------------------------------------
-
+        # Collect the category image for cleanup after commit.
         if (
             category.image
-            and category.image.startswith(
-                "/uploads/categories/"
-            )
+            and category.image.startswith("/uploads/categories/")
         ):
+            category_filename = os.path.basename(category.image)
 
-            category_filename = os.path.basename(
-                category.image
-            )
-
-            category_image_file = os.path.join(
-                Config.CATEGORY_UPLOAD_FOLDER,
-                category_filename
-            )
-
-            if os.path.isfile(
-                category_image_file
-            ):
-
-                try:
-
-                    os.remove(
-                        category_image_file
-                    )
-
-                except OSError:
-
-                    pass
-
-        # -------------------------------------------------
-        # DELETE PRODUCTS AND THEIR IMAGES
-        # -------------------------------------------------
-
+        # Delete products and their image records.
         for product in products:
 
             images = (
                 ProductImage.query
-                .filter_by(
-                    product_id=product.id
-                )
+                .filter_by(product_id=product.id)
                 .all()
             )
-
-            # ---------------------------------------------
-            # DELETE PHYSICAL PRODUCT IMAGE FILES
-            # ---------------------------------------------
 
             for image in images:
 
                 if (
                     image.image_url
-                    and image.image_url.startswith(
-                        "/uploads/products/"
-                    )
+                    and image.image_url.startswith("/uploads/products/")
                 ):
-
-                    filename = os.path.basename(
-                        image.image_url
+                    product_filenames.append(
+                        os.path.basename(image.image_url)
                     )
 
-                    physical_file = os.path.join(
-                        Config.PRODUCT_UPLOAD_FOLDER,
-                        filename
-                    )
-
-                    if os.path.isfile(
-                        physical_file
-                    ):
-
-                        try:
-
-                            os.remove(
-                                physical_file
-                            )
-
-                        except OSError:
-
-                            pass
-
-                db.session.delete(
-                    image
-                )
-
+                db.session.delete(image)
                 deleted_image_count += 1
 
             db.session.flush()
 
-            db.session.delete(
-                product
-            )
-
+            db.session.delete(product)
             deleted_product_count += 1
 
         db.session.flush()
-
-        db.session.delete(
-            category
-        )
-
+        db.session.delete(category)
         db.session.commit()
 
     except Exception as error:
@@ -1497,25 +1371,23 @@ def delete_category(category_id):
         db.session.rollback()
 
         return jsonify({
-
             "status": "error",
-
             "message": "Unable to delete category",
-
             "error": str(error)
-
         }), 409
 
+    # Clean up Cloud Storage only after the database succeeds.
+    if category_filename:
+        safely_delete_image("categories", category_filename)
+
+    for filename in product_filenames:
+        safely_delete_image("products", filename)
+
     return jsonify({
-
         "status": "success",
-
         "message": "Category deleted successfully",
-
         "deleted_products": deleted_product_count,
-
         "deleted_product_images": deleted_image_count
-
     }), 200
 
 
@@ -1632,9 +1504,7 @@ def create_product():
 
     if image_file:
 
-        if not allowed_image(
-            image_file.filename
-        ):
+        if not allowed_image(image_file):
 
             return jsonify({
 
@@ -2004,7 +1874,7 @@ def create_product():
     # -----------------------------------------------------
 
     image_url = None
-    file_path = None
+    uploaded_filename = None
 
     # -----------------------------------------------------
     # SAVE IMAGE ONLY WHEN PROVIDED
@@ -2012,78 +1882,36 @@ def create_product():
 
     if image_file:
 
-        # -------------------------------------------------
-        # CREATE UPLOAD DIRECTORY
-        # -------------------------------------------------
-
-        os.makedirs(
-            Config.PRODUCT_UPLOAD_FOLDER,
-            exist_ok=True
-        )
-
-        # -------------------------------------------------
-        # SECURE ORIGINAL FILENAME
-        # -------------------------------------------------
-
-        original_filename = secure_filename(
-            image_file.filename
-        )
+        original_filename = secure_filename(image_file.filename)
 
         if not original_filename:
-
             return jsonify({
-
                 "status": "error",
-
                 "message": "Invalid image filename"
-
             }), 400
 
         # -------------------------------------------------
-        # UNIQUE IMAGE FILENAME
+        # UPLOAD IMAGE TO CLOUD STORAGE
         # -------------------------------------------------
 
-        unique_filename = (
+        uploaded_filename = (
             f"new_product_"
             f"{uuid.uuid4().hex}_"
             f"{original_filename}"
         )
 
-        file_path = os.path.join(
-            Config.PRODUCT_UPLOAD_FOLDER,
-            unique_filename
-        )
-
-        # -------------------------------------------------
-        # SAVE IMAGE FILE
-        # -------------------------------------------------
-
         try:
-
-            image_file.save(
-                file_path
+            image_url = upload_image(
+                image_file,
+                "products",
+                uploaded_filename
             )
-
         except Exception as error:
-
             return jsonify({
-
                 "status": "error",
-
                 "message": "Unable to save product image",
-
                 "error": str(error)
-
             }), 500
-
-        # -------------------------------------------------
-        # PUBLIC IMAGE URL
-        # -------------------------------------------------
-
-        image_url = (
-            f"/uploads/products/"
-            f"{unique_filename}"
-        )
 
     # -----------------------------------------------------
     # CREATE PRODUCT
@@ -2163,22 +1991,8 @@ def create_product():
 
         db.session.rollback()
 
-        if (
-            file_path
-            and os.path.isfile(
-                file_path
-            )
-        ):
-
-            try:
-
-                os.remove(
-                    file_path
-                )
-
-            except OSError:
-
-                pass
+        if uploaded_filename:
+            safely_delete_image("products", uploaded_filename)
 
         return jsonify({
 
@@ -2563,177 +2377,92 @@ def update_product(product_id):
 )
 def delete_product(product_id):
 
-    product = db.session.get(
-        Product,
-        product_id
-    )
+    product = db.session.get(Product, product_id)
 
     if not product:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Product not found"
-
         }), 404
 
     try:
-
-        # -------------------------------------------------
-        # CHECK ORDER HISTORY
-        # -------------------------------------------------
-
+        # Check order history.
         order_item = db.session.execute(
-
-            text(
-                """
+            text("""
                 SELECT 1
                 FROM order_items
                 WHERE product_id = :product_id
                 LIMIT 1
-                """
-            ),
-
-            {
-                "product_id": product_id
-            }
-
+            """),
+            {"product_id": product_id}
         ).first()
 
-        # -------------------------------------------------
-        # PRODUCT HAS ORDER HISTORY
-        # -------------------------------------------------
-
+        # Preserve products referenced by existing orders.
         if order_item:
-
             product.is_active = False
-
             db.session.commit()
 
             return jsonify({
-
                 "status": "success",
-
                 "message": (
                     "Product has existing order history "
                     "and was deactivated instead of "
                     "permanently deleted."
                 ),
-
                 "deleted": False,
-
                 "deactivated": True,
-
-                "product": product_to_dict(
-                    product
-                )
-
+                "product": product_to_dict(product)
             }), 200
-
-        # -------------------------------------------------
-        # NO ORDER HISTORY
-        # -------------------------------------------------
 
         images = (
             ProductImage.query
-            .filter_by(
-                product_id=product_id
-            )
+            .filter_by(product_id=product_id)
             .all()
         )
 
-        deleted_image_count = 0
+        deleted_image_count = len(images)
+        image_filenames = []
 
-        # -------------------------------------------------
-        # DELETE PHYSICAL IMAGE FILES
-        # -------------------------------------------------
-
+        # Collect GCS object names before deleting database records.
         for image in images:
-
             if (
                 image.image_url
-                and image.image_url.startswith(
-                    "/uploads/products/"
-                )
+                and image.image_url.startswith("/uploads/products/")
             ):
-
-                filename = os.path.basename(
-                    image.image_url
+                image_filenames.append(
+                    os.path.basename(image.image_url)
                 )
 
-                physical_file = os.path.join(
-                    Config.PRODUCT_UPLOAD_FOLDER,
-                    filename
-                )
-
-                if os.path.isfile(
-                    physical_file
-                ):
-
-                    try:
-
-                        os.remove(
-                            physical_file
-                        )
-
-                    except OSError:
-
-                        pass
-
-        # -------------------------------------------------
-        # DELETE IMAGE DATABASE RECORDS
-        # -------------------------------------------------
-
+        # Delete image database records.
         for image in images:
-
-            db.session.delete(
-                image
-            )
-
-            deleted_image_count += 1
+            db.session.delete(image)
 
         db.session.flush()
 
-        # -------------------------------------------------
-        # DELETE PRODUCT
-        # -------------------------------------------------
-
-        db.session.delete(
-            product
-        )
-
+        # Delete the product.
+        db.session.delete(product)
         db.session.commit()
 
     except Exception as error:
-
         db.session.rollback()
 
         return jsonify({
-
             "status": "error",
-
             "message": "Unable to delete product",
-
             "error": str(error)
-
         }), 409
 
+    # Delete GCS objects only after the database commit succeeds.
+    for filename in image_filenames:
+        safely_delete_image("products", filename)
+
     return jsonify({
-
         "status": "success",
-
         "message": "Product deleted successfully",
-
         "deleted": True,
-
         "deactivated": False,
-
         "deleted_product_images": deleted_image_count
-
     }), 200
-
-
 # =========================================================
 # PRODUCT IMAGES
 # LIST
@@ -2927,240 +2656,116 @@ def add_product_image(product_id):
 )
 def upload_product_image(product_id):
 
-    # -----------------------------------------------------
-    # FIND PRODUCT
-    # -----------------------------------------------------
-
-    product = db.session.get(
-        Product,
-        product_id
-    )
+    product = db.session.get(Product, product_id)
 
     if not product:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Product not found"
-
         }), 404
 
-    # -----------------------------------------------------
-    # CHECK FILE
-    # -----------------------------------------------------
-
     if "image" not in request.files:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Image file is required"
-
         }), 400
 
     file = request.files["image"]
 
-    if (
-        not file
-        or not file.filename
-    ):
-
+    if not file or not file.filename:
         return jsonify({
-
             "status": "error",
-
             "message": "No image selected"
-
         }), 400
 
-    # -----------------------------------------------------
-    # VALIDATE IMAGE
-    # -----------------------------------------------------
-
-    if not allowed_image(
-        file.filename
-    ):
-
+    if not allowed_image(file):
         return jsonify({
-
             "status": "error",
-
             "message": (
                 "Invalid image format. "
                 "Allowed formats: png, jpg, jpeg, webp"
             )
-
         }), 400
 
-    # -----------------------------------------------------
-    # CREATE UPLOAD DIRECTORY
-    # -----------------------------------------------------
-
-    os.makedirs(
-        Config.PRODUCT_UPLOAD_FOLDER,
-        exist_ok=True
-    )
-
-    # -----------------------------------------------------
-    # SECURE FILENAME
-    # -----------------------------------------------------
-
-    original_filename = secure_filename(
-        file.filename
-    )
+    original_filename = secure_filename(file.filename)
 
     if not original_filename:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Invalid filename"
-
         }), 400
 
-    # -----------------------------------------------------
-    # UNIQUE FILENAME
-    # -----------------------------------------------------
-
     unique_filename = (
-
         f"{product_id}_"
-
         f"{uuid.uuid4().hex}_"
-
         f"{original_filename}"
     )
 
-    file_path = os.path.join(
-
-        Config.PRODUCT_UPLOAD_FOLDER,
-
-        unique_filename
-    )
-
-    # -----------------------------------------------------
-    # SAVE FILE
-    # -----------------------------------------------------
-
+    # Upload image to Google Cloud Storage.
     try:
-
-        file.save(
-            file_path
+        image_url = upload_image(
+            file,
+            "products",
+            unique_filename
         )
-
     except Exception as error:
-
         return jsonify({
-
             "status": "error",
-
             "message": "Unable to save image",
-
             "error": str(error)
-
         }), 500
 
-    # -----------------------------------------------------
-    # PUBLIC URL
-    # -----------------------------------------------------
-
-    image_url = (
-
-        f"/uploads/products/"
-        f"{unique_filename}"
-    )
-
-    # -----------------------------------------------------
-    # EXISTING IMAGES
-    # -----------------------------------------------------
-
-    existing_image_count = (
-
-        ProductImage.query
-        .filter_by(
-            product_id=product_id
+    try:
+        existing_image_count = (
+            ProductImage.query
+            .filter_by(product_id=product_id)
+            .count()
         )
-        .count()
-    )
 
-    # -----------------------------------------------------
-    # FIRST IMAGE = PRIMARY
-    # -----------------------------------------------------
+        # First gallery image becomes primary.
+        is_primary = existing_image_count == 0
 
-    is_primary = (
+        if is_primary:
+            ProductImage.query.filter_by(
+                product_id=product_id
+            ).update({
+                "is_primary": False
+            })
 
-        existing_image_count == 0
-    )
+            product.image = image_url
 
-    if is_primary:
+        alt_text = request.form.get(
+            "alt_text",
+            product.name
+        )
 
-        ProductImage.query.filter_by(
+        image = ProductImage(
+            product_id=product_id,
+            image_url=image_url,
+            alt_text=alt_text,
+            is_primary=is_primary,
+            display_order=existing_image_count
+        )
 
-            product_id=product_id
+        db.session.add(image)
+        db.session.commit()
 
-        ).update({
+    except Exception as error:
+        db.session.rollback()
+        safely_delete_image("products", unique_filename)
 
-            "is_primary": False
-        })
-
-        product.image = image_url
-
-    # -----------------------------------------------------
-    # ALT TEXT
-    # -----------------------------------------------------
-
-    alt_text = request.form.get(
-
-        "alt_text",
-
-        product.name
-    )
-
-    # -----------------------------------------------------
-    # CREATE IMAGE RECORD
-    # -----------------------------------------------------
-
-    image = ProductImage(
-
-        product_id=product_id,
-
-        image_url=image_url,
-
-        alt_text=alt_text,
-
-        is_primary=is_primary,
-
-        display_order=existing_image_count
-    )
-
-    db.session.add(
-        image
-    )
-
-    db.session.commit()
+        return jsonify({
+            "status": "error",
+            "message": "Unable to save product image record",
+            "error": str(error)
+        }), 500
 
     return jsonify({
-
         "status": "success",
-
-        "message": (
-            "Product image uploaded successfully"
-        ),
-
-        "image": product_image_to_dict(
-            image
-        ),
-
-        "product": product_to_dict(
-            product
-        )
-
+        "message": "Product image uploaded successfully",
+        "image": product_image_to_dict(image),
+        "product": product_to_dict(product)
     }), 201
-
-
 # =========================================================
 # PRODUCT IMAGE
 # SET PRIMARY
@@ -3350,40 +2955,12 @@ def delete_product_image(
     db.session.commit()
 
     # -----------------------------------------------------
-    # DELETE PHYSICAL FILE
+    # DELETE IMAGE FROM GOOGLE CLOUD STORAGE
     # -----------------------------------------------------
 
-    if (
-        image_url
-        and image_url.startswith(
-            "/uploads/products/"
-        )
-    ):
-
-        filename = os.path.basename(
-            image_url
-        )
-
-        physical_file = os.path.join(
-
-            Config.PRODUCT_UPLOAD_FOLDER,
-
-            filename
-        )
-
-        if os.path.isfile(
-            physical_file
-        ):
-
-            try:
-
-                os.remove(
-                    physical_file
-                )
-
-            except OSError:
-
-                pass
+    if image_url and image_url.startswith("/uploads/products/"):
+        filename = os.path.basename(image_url)
+        safely_delete_image("products", filename)
 
     return jsonify({
 

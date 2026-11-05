@@ -71,3 +71,4 @@ Werkzeug==3.1.9
 yarl==1.25.1
 
 gunicorn==23.0.0
+google-cloud-storage==3.17.1

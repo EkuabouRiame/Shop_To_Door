@@ -1,116 +1,77 @@
-import os
+from io import BytesIO
 
-from flask import (
-    Blueprint,
-    send_from_directory,
-    jsonify
-)
+from flask import Blueprint, jsonify, send_file
+from werkzeug.utils import secure_filename
 
-from ..config import Config
+from ..media_storage import download_image
 
-
-# =========================================================
-# UPLOADS BLUEPRINT
-# =========================================================
 
 uploads_bp = Blueprint(
     "uploads",
     __name__,
-    url_prefix="/uploads"
+    url_prefix="/uploads",
 )
 
+ALLOWED_IMAGE_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
 
-# =========================================================
-# PRODUCT IMAGE
-# =========================================================
+}
 
-@uploads_bp.get("/products/<path:filename>")
-def product_image(filename):
 
-    upload_folder = Config.PRODUCT_UPLOAD_FOLDER
+def serve_image(folder, filename):
+    safe_filename = secure_filename(filename)
 
-    os.makedirs(
-        upload_folder,
-        exist_ok=True
-    )
-
-    file_path = os.path.join(
-        upload_folder,
-        filename
-    )
-
-    upload_folder_abs = os.path.abspath(
-        upload_folder
-    )
-
-    file_path_abs = os.path.abspath(
-        file_path
-    )
-
-    if not file_path_abs.startswith(
-        upload_folder_abs + os.sep
-    ):
+    if not safe_filename or safe_filename != filename:
         return jsonify({
             "status": "error",
-            "message": "Invalid image path"
+            "message": "Invalid image filename",
         }), 400
 
-    if not os.path.isfile(file_path_abs):
+    try:
+        result = download_image(folder, safe_filename)
+    except Exception:
+        from flask import current_app
+        current_app.logger.exception(
+            "Unable to read image from Cloud Storage"
+        )
+        return jsonify({
+            "status": "error",
+            "message": "Unable to load image",
+        }), 500
+
+    if result is None:
         return jsonify({
             "status": "error",
             "message": "Image not found",
-            "filename": filename
+            "filename": safe_filename,
         }), 404
 
-    return send_from_directory(
-        upload_folder,
-        filename
+    data, content_type = result
+    content_type = content_type.lower().split(";")[0].strip()
+
+    if content_type not in ALLOWED_IMAGE_TYPES:
+        return jsonify({
+            "status": "error",
+            "message": "Unsupported image type",
+        }), 415
+
+    response = send_file(
+        BytesIO(data),
+        mimetype=content_type,
+        max_age=3600,
     )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+
+    return response
 
 
-# =========================================================
-# CATEGORY IMAGE
-# =========================================================
+@uploads_bp.get("/products/<path:filename>")
+def product_image(filename):
+    return serve_image("products", filename)
+
 
 @uploads_bp.get("/categories/<path:filename>")
 def category_image(filename):
-
-    upload_folder = Config.CATEGORY_UPLOAD_FOLDER
-
-    os.makedirs(
-        upload_folder,
-        exist_ok=True
-    )
-
-    file_path = os.path.join(
-        upload_folder,
-        filename
-    )
-
-    upload_folder_abs = os.path.abspath(
-        upload_folder
-    )
-
-    file_path_abs = os.path.abspath(
-        file_path
-    )
-
-    if not file_path_abs.startswith(
-        upload_folder_abs + os.sep
-    ):
-        return jsonify({
-            "status": "error",
-            "message": "Invalid category image path"
-        }), 400
-
-    if not os.path.isfile(file_path_abs):
-        return jsonify({
-            "status": "error",
-            "message": "Category image not found",
-            "filename": filename
-        }), 404
-
-    return send_from_directory(
-        upload_folder,
-        filename
-    )
+    return serve_image("categories", filename)
